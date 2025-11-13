@@ -38,7 +38,7 @@ func (s *DatabaseSeeder) seedUsers(ctx context.Context) error {
 		return err
 	}
 
-	rtoPassword, err := passwordService.Hash("RTO123!")
+	rtoPassword, err := passwordService.Hash("RtoPass123!")
 	if err != nil {
 		return err
 	}

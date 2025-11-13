@@ -15,7 +15,7 @@ services:
       - postgres-test
     volumes:
       - ./tests:/app/tests
-    command: ["./run-tests.sh"]
+    command: ["sh", "/app/run-tests.sh"]
 
   postgres-test:
     image: postgres:15-alpine

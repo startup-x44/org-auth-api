@@ -41,27 +41,27 @@ type RedisConfig struct {
 }
 
 type JWTConfig struct {
-	Secret           string
-	AccessTokenTTL   int // in minutes
-	RefreshTokenTTL  int // in days
-	Issuer           string
-	SigningMethod    string
+	Secret          string
+	AccessTokenTTL  int // in minutes
+	RefreshTokenTTL int // in days
+	Issuer          string
+	SigningMethod   string
 }
 
 type RateLimitConfig struct {
-	LoginAttempts    int // per 15 minutes per IP
-	PasswordReset    int // per hour per email
-	APICalls         int // per minute per user
-	Registration     int // per hour per IP
-	MaxSessions      int // per user
+	LoginAttempts int // per 15 minutes per IP
+	PasswordReset int // per hour per email
+	APICalls      int // per minute per user
+	Registration  int // per hour per IP
+	MaxSessions   int // per user
 }
 
 type EmailConfig struct {
-	Provider     string
-	APIKey       string
-	FromEmail    string
-	FromName     string
-	ResetURL     string
+	Provider  string
+	APIKey    string
+	FromEmail string
+	FromName  string
+	ResetURL  string
 }
 
 func Load() *Config {
@@ -91,17 +91,17 @@ func Load() *Config {
 		},
 		JWT: JWTConfig{
 			Secret:          getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
-			AccessTokenTTL:  getEnvAsInt("JWT_ACCESS_TOKEN_EXPIRY", 60), // 1 hour
-			RefreshTokenTTL: getEnvAsInt("JWT_REFRESH_TOKEN_EXPIRY", 30),   // 30 days
+			AccessTokenTTL:  getEnvAsInt("JWT_ACCESS_TOKEN_EXPIRY", 60),  // 1 hour
+			RefreshTokenTTL: getEnvAsInt("JWT_REFRESH_TOKEN_EXPIRY", 30), // 30 days
 			Issuer:          getEnv("JWT_ISSUER", "auth-service"),
 			SigningMethod:   getEnv("JWT_SIGNING_METHOD", "HS256"),
 		},
 		RateLimit: RateLimitConfig{
-			LoginAttempts: getEnvAsInt("RATE_LIMIT_LOGIN_ATTEMPTS", 5),    // 5 per 15 min per IP
-			PasswordReset: getEnvAsInt("RATE_LIMIT_PASSWORD_RESET", 3),     // 3 per hour per email
-			APICalls:      getEnvAsInt("RATE_LIMIT_API_CALLS", 1000),       // 1000 per minute per user
-			Registration:  getEnvAsInt("RATE_LIMIT_REGISTRATION", 10),      // 10 per hour per IP
-			MaxSessions:   getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),       // 5 per user
+			LoginAttempts: getEnvAsInt("RATE_LIMIT_LOGIN_ATTEMPTS", 5), // 5 per 15 min per IP
+			PasswordReset: getEnvAsInt("RATE_LIMIT_PASSWORD_RESET", 3), // 3 per hour per email
+			APICalls:      getEnvAsInt("RATE_LIMIT_API_CALLS", 1000),   // 1000 per minute per user
+			Registration:  getEnvAsInt("RATE_LIMIT_REGISTRATION", 10),  // 10 per hour per IP
+			MaxSessions:   getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),   // 5 per user
 		},
 		Email: EmailConfig{
 			Provider:  getEnv("EMAIL_PROVIDER", "sendgrid"),
@@ -139,12 +139,19 @@ func getEnvAsInt(key string, defaultValue int) int {
 
 // validateConfig validates sensitive configuration values
 func validateConfig(cfg *Config) error {
-	// Validate JWT secret
-	if cfg.JWT.Secret == "" || cfg.JWT.Secret == "your-super-secret-jwt-key-change-in-production" {
-		return errors.New("JWT_SECRET must be set to a secure value in production")
-	}
-	if len(cfg.JWT.Secret) < 32 {
-		return errors.New("JWT_SECRET must be at least 32 characters long")
+	// Validate JWT secret - only strict validation in production
+	if cfg.Environment == "production" {
+		if cfg.JWT.Secret == "" || cfg.JWT.Secret == "your-super-secret-jwt-key-change-in-production" {
+			return errors.New("JWT_SECRET must be set to a secure value in production")
+		}
+		if len(cfg.JWT.Secret) < 32 {
+			return errors.New("JWT_SECRET must be at least 32 characters long")
+		}
+	} else {
+		// Development mode - just ensure it's not empty
+		if cfg.JWT.Secret == "" {
+			return errors.New("JWT_SECRET must be set")
+		}
 	}
 
 	// Validate database password
