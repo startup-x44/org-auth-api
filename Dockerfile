@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -7,14 +7,17 @@ WORKDIR /app
 # Install git (required for go mod download)
 RUN apk add --no-cache git
 
-# Copy go mod and sum files
-COPY go.mod go.sum ./
+# Copy go mod and sum files (if they exist)
+COPY go.mod* go.sum* ./
 
-# Download dependencies
-RUN go mod download
+# Download dependencies and tidy
+RUN go mod tidy && go mod download
 
 # Copy source code
 COPY . .
+
+# Tidy dependencies again after copying source code
+RUN go mod tidy
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/server

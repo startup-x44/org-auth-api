@@ -18,9 +18,10 @@ import (
 	"auth-service/internal/config"
 	"auth-service/internal/handler"
 	"auth-service/internal/middleware"
-	"auth-service/internal/models"
 	"auth-service/internal/repository"
+	"auth-service/internal/seeder"
 	"auth-service/internal/service"
+	"auth-service/pkg/email"
 	"auth-service/pkg/jwt"
 	"auth-service/pkg/password"
 )
@@ -44,9 +45,18 @@ func main() {
 	repo := repository.NewRepository(db)
 
 	// Initialize services
-	jwtService := jwt.NewService(cfg.JWT)
-	passwordSvc := password.NewService()
-	authService := service.NewAuthService(repo, jwtService, passwordSvc)
+	jwtService, err := jwt.NewService(&cfg.JWT)
+	if err != nil {
+		log.Fatal("Failed to initialize JWT service:", err)
+	}
+	passwordService := password.NewService()
+	emailSvc := email.NewService(&cfg.Email)
+	authService := service.NewAuthService(repo, jwtService, passwordService)
+
+	// Set Redis and Email clients for user service
+	userSvc := authService.UserService()
+	userSvc.SetRedisClient(redisClient)
+	userSvc.SetEmailService(emailSvc)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
@@ -104,6 +114,11 @@ func initDatabase(cfg *config.Config) *gorm.DB {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Run database seeders
+	if err := runSeeders(db); err != nil {
+		log.Fatalf("Failed to run database seeders: %v", err)
+	}
+
 	log.Println("Database connected and migrated successfully")
 	return db
 }
@@ -125,6 +140,12 @@ func initRedis(cfg *config.Config) *redis.Client {
 	return rdb
 }
 
+func runSeeders(db *gorm.DB) error {
+	seeder := seeder.NewDatabaseSeeder(db)
+	ctx := context.Background()
+	return seeder.Seed(ctx)
+}
+
 func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, authMiddleware *middleware.AuthMiddleware) *gin.Engine {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -139,6 +160,11 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 	router.Use(middleware.RateLimitMiddleware())
 	router.Use(middleware.LoggingMiddleware())
 	router.Use(middleware.RecoveryMiddleware())
+	router.Use(middleware.SecurityHeadersMiddleware())
+
+	// CSRF middleware for state-changing operations
+	csrfConfig := middleware.DefaultCSRFConfig(cfg.JWT.Secret, cfg.Environment == "production")
+	router.Use(middleware.CSRFMiddleware(csrfConfig))
 
 	// Health check
 	router.GET("/health", authHandler.HealthCheck)

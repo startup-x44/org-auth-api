@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"auth-service/internal/repository"
 	"auth-service/pkg/jwt"
@@ -12,6 +13,8 @@ import (
 type AuthService interface {
 	UserService() UserService
 	TenantService() TenantService
+	SessionService() SessionService
+	BackgroundJobService() BackgroundJobService
 	ValidateToken(ctx context.Context, token string) (*TokenClaims, error)
 	HealthCheck(ctx context.Context) (*HealthCheckResponse, error)
 }
@@ -35,15 +38,43 @@ type HealthCheckResponse struct {
 type authService struct {
 	userService   UserService
 	tenantService TenantService
-	jwtService    jwt.Service
+	sessionSvc    SessionService
+	jobSvc        BackgroundJobService
+	jwtService    *jwt.Service
 	repo          repository.Repository
 }
 
 // NewAuthService creates a new auth service
-func NewAuthService(repo repository.Repository, jwtService jwt.Service, passwordSvc password.Service) AuthService {
+func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwordService *password.Service) AuthService {
+	// Create session service
+	sessionConfig := &SessionConfig{
+		MaxSessionsPerUser:         5,
+		SessionTimeout:             24 * time.Hour,
+		MaxInactiveTime:            7 * 24 * time.Hour,
+		EnableGeoTracking:          true,
+		EnableDeviceTracking:       true,
+		SuspiciousActivityThreshold: 3,
+	}
+	sessionSvc := NewSessionService(repo, sessionConfig)
+
+	// Create background job service
+	jobConfig := &BackgroundJobConfig{
+		SessionCleanupInterval:       1 * time.Hour,
+		TokenCleanupInterval:         6 * time.Hour,
+		FailedAttemptCleanupInterval: 24 * time.Hour,
+		MaxInactiveSessionTime:       30 * 24 * time.Hour,
+		MaxFailedAttemptAge:          7 * 24 * time.Hour,
+	}
+	jobSvc := NewBackgroundJobService(repo, sessionSvc, jobConfig)
+
+	userSvc := NewUserService(repo, jwtService, passwordService)
+	userSvc.SetSessionService(sessionSvc)
+
 	return &authService{
-		userService:   NewUserService(repo, jwtService, passwordSvc),
+		userService:   userSvc,
 		tenantService: NewTenantService(repo),
+		sessionSvc:    sessionSvc,
+		jobSvc:        jobSvc,
 		jwtService:    jwtService,
 		repo:          repo,
 	}
@@ -59,6 +90,16 @@ func (s *authService) TenantService() TenantService {
 	return s.tenantService
 }
 
+// SessionService returns the session service
+func (s *authService) SessionService() SessionService {
+	return s.sessionSvc
+}
+
+// BackgroundJobService returns the background job service
+func (s *authService) BackgroundJobService() BackgroundJobService {
+	return s.jobSvc
+}
+
 // ValidateToken validates JWT token and returns claims
 func (s *authService) ValidateToken(ctx context.Context, token string) (*TokenClaims, error) {
 	claims, err := s.jwtService.ValidateToken(token)
@@ -67,9 +108,9 @@ func (s *authService) ValidateToken(ctx context.Context, token string) (*TokenCl
 	}
 
 	return &TokenClaims{
-		UserID:   claims.UserID,
+		UserID:   claims.UserID.String(),
 		UserType: claims.UserType,
-		TenantID: claims.TenantID,
+		TenantID: claims.TenantID.String(),
 	}, nil
 }
 

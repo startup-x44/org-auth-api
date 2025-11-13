@@ -25,11 +25,11 @@ func TestPasswordService(t *testing.T) {
 	}
 
 	// Test password verification
-	if err := svc.Verify(plainPassword, hash); err != nil {
+	if valid, err := svc.Verify(plainPassword, hash); err != nil || !valid {
 		t.Fatalf("Failed to verify correct password: %v", err)
 	}
 
-	if err := svc.Verify("WrongPassword123!", hash); err == nil {
+	if valid, err := svc.Verify("WrongPassword123!", hash); err == nil && valid {
 		t.Error("Should fail to verify wrong password")
 	}
 
@@ -61,7 +61,7 @@ func TestPasswordValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to hash valid password %s: %v", pwd, err)
 		}
-		if err := svc.Verify(pwd, hash); err != nil {
+		if valid, err := svc.Verify(pwd, hash); err != nil || !valid {
 			t.Fatalf("Failed to verify valid password %s: %v", pwd, err)
 		}
 	}
@@ -70,6 +70,62 @@ func TestPasswordValidation(t *testing.T) {
 		_, err := svc.Hash(pwd)
 		if err == nil {
 			t.Fatalf("Should fail to hash invalid password: %s", pwd)
+		}
+	}
+}
+
+// BenchmarkPasswordVerify benchmarks password verification performance
+func BenchmarkPasswordVerify(b *testing.B) {
+	svc := password.NewService()
+	password := "BenchmarkTestPassword123!"
+	hash, err := svc.Hash(password)
+	if err != nil {
+		b.Fatalf("Failed to hash password: %v", err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		valid, err := svc.Verify(password, hash)
+		if err != nil || !valid {
+			b.Fatalf("Failed to verify password: %v", err)
+		}
+	}
+}
+
+// BenchmarkPasswordVerifyWrong benchmarks password verification with wrong password
+func BenchmarkPasswordVerifyWrong(b *testing.B) {
+	svc := password.NewService()
+	password := "BenchmarkTestPassword123!"
+	hash, err := svc.Hash(password)
+	if err != nil {
+		b.Fatalf("Failed to hash password: %v", err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		valid, err := svc.Verify("WrongPassword123!", hash)
+		// We expect this to fail, but we still want to measure the performance
+		_ = valid
+		_ = err
+	}
+}
+
+// BenchmarkPasswordHash benchmarks password hashing performance
+func BenchmarkPasswordHash(b *testing.B) {
+	svc := password.NewService()
+	password := "BenchmarkTestPassword123!"
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, err := svc.Hash(password)
+		if err != nil {
+			b.Fatalf("Failed to hash password: %v", err)
 		}
 	}
 }

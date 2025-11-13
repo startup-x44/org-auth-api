@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  auth-service-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - TEST_DB_HOST=postgres-test
+      - TEST_DB_PORT=5432
+      - TEST_DB_USER=auth_user
+      - TEST_DB_PASSWORD=auth_password
+      - TEST_DB_SSLMODE=disable
+    depends_on:
+      - postgres-test
+    volumes:
+      - ./tests:/app/tests
+    command: ["./run-tests.sh"]
+
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=auth_user
+      - POSTGRES_PASSWORD=auth_password
+      - POSTGRES_DB=auth_db
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth_user -d auth_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_test_data:
+
+networks:
+  default:
+    driver: bridge

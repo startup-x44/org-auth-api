@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"auth-service/internal/models"
@@ -73,7 +74,7 @@ func (r *tenantRepository) GetByDomain(ctx context.Context, domain string) (*mod
 
 // Update updates a tenant
 func (r *tenantRepository) Update(ctx context.Context, tenant *models.Tenant) error {
-	if tenant == nil || tenant.ID == "" {
+	if tenant == nil || tenant.ID == uuid.Nil {
 		return errors.New("tenant and tenant ID are required")
 	}
 

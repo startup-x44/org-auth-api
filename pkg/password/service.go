@@ -11,6 +11,13 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
+// PasswordService defines the interface for password operations
+type PasswordService interface {
+	Hash(password string) (string, error)
+	Verify(password, hash string) (bool, error)
+	ValidatePassword(password string) error
+}
+
 // Service handles password operations
 type Service struct {
 	time    uint32
@@ -31,6 +38,10 @@ func NewService() *Service {
 
 // Hash generates a hash from a password
 func (s *Service) Hash(password string) (string, error) {
+	if err := s.ValidatePassword(password); err != nil {
+		return "", err
+	}
+
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("failed to generate salt: %w", err)
@@ -97,6 +108,49 @@ func (s *Service) Verify(password, hash string) (bool, error) {
 	computedHash := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(expectedHash)))
 
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1, nil
+}
+
+// ValidatePassword validates password strength requirements
+func (s *Service) ValidatePassword(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters long")
+	}
+	if len(password) > 128 {
+		return fmt.Errorf("password must be at most 128 characters long")
+	}
+
+	hasUpper := false
+	hasLower := false
+	hasDigit := false
+	hasSpecial := false
+
+	for _, char := range password {
+		switch {
+		case char >= 'A' && char <= 'Z':
+			hasUpper = true
+		case char >= 'a' && char <= 'z':
+			hasLower = true
+		case char >= '0' && char <= '9':
+			hasDigit = true
+		case (char >= 32 && char <= 47) || (char >= 58 && char <= 64) || (char >= 91 && char <= 96) || (char >= 123 && char <= 126):
+			hasSpecial = true
+		}
+	}
+
+	if !hasUpper {
+		return fmt.Errorf("password must contain at least one uppercase letter")
+	}
+	if !hasLower {
+		return fmt.Errorf("password must contain at least one lowercase letter")
+	}
+	if !hasDigit {
+		return fmt.Errorf("password must contain at least one digit")
+	}
+	if !hasSpecial {
+		return fmt.Errorf("password must contain at least one special character")
+	}
+
+	return nil
 }
 
 // NeedsRehash checks if a hash needs to be rehashed with current parameters

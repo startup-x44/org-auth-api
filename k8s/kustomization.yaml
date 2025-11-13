@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: auth-service
+
+# Common labels applied to all resources
+commonLabels:
+  app: auth-service
+  environment: production
+
+# Resources to include
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  - poddisruptionbudget.yaml
+
+# Image transformations
+images:
+  - name: auth-service
+    newTag: latest
+
+# ConfigMap generator for environment-specific configs
+configMapGenerator:
+  - name: auth-service-config
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+
+# Secret generator (use for non-sensitive secrets or templating)
+# secretGenerator:
+#   - name: auth-service-secret
+#     literals:
+#       - JWT_SECRET=your-actual-jwt-secret-here
+
+# Namespace for all resources
+namespace: auth-service
+
+# Replica count override
+replicas:
+  - name: auth-service
+    count: 3
+
+# Resource patches for different environments
+patchesStrategicMerge: []
+
+# JSON patches for fine-grained modifications
+patches: []

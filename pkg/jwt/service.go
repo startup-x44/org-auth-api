@@ -3,8 +3,6 @@ package jwt
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +12,12 @@ import (
 	"auth-service/internal/config"
 	"auth-service/internal/models"
 )
+
+// JWTService defines the interface for JWT operations
+type JWTService interface {
+	GenerateAccessToken(user *models.User) (string, error)
+	GenerateRefreshToken(user *models.User) (string, error)
+}
 
 // Claims represents the JWT claims
 type Claims struct {

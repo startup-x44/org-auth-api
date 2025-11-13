@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -16,6 +17,7 @@ type repository struct {
 	sessionRepo    UserSessionRepository
 	refreshRepo    RefreshTokenRepository
 	passwordRepo   PasswordResetRepository
+	failedAttemptRepo FailedLoginAttemptRepository
 }
 
 // NewRepository creates a new repository instance
@@ -27,6 +29,7 @@ func NewRepository(db *gorm.DB) Repository {
 		sessionRepo:    NewUserSessionRepository(db),
 		refreshRepo:    NewRefreshTokenRepository(db),
 		passwordRepo:   NewPasswordResetRepository(db),
+		failedAttemptRepo: NewFailedLoginAttemptRepository(db),
 	}
 }
 
@@ -55,6 +58,11 @@ func (r *repository) PasswordReset() PasswordResetRepository {
 	return r.passwordRepo
 }
 
+// FailedLoginAttempt returns the failed login attempt repository
+func (r *repository) FailedLoginAttempt() FailedLoginAttemptRepository {
+	return r.failedAttemptRepo
+}
+
 // BeginTransaction starts a new database transaction
 func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) {
 	tx := r.db.WithContext(ctx).Begin()
@@ -69,6 +77,7 @@ func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) 
 		sessionRepo:    NewUserSessionRepository(tx),
 		refreshRepo:    NewRefreshTokenRepository(tx),
 		passwordRepo:   NewPasswordResetRepository(tx),
+		failedAttemptRepo: NewFailedLoginAttemptRepository(tx),
 	}, nil
 }
 
@@ -80,6 +89,7 @@ type transaction struct {
 	sessionRepo    UserSessionRepository
 	refreshRepo    RefreshTokenRepository
 	passwordRepo   PasswordResetRepository
+	failedAttemptRepo FailedLoginAttemptRepository
 }
 
 // Commit commits the transaction
@@ -117,13 +127,45 @@ func (t *transaction) PasswordReset() PasswordResetRepository {
 	return t.passwordRepo
 }
 
+// FailedLoginAttempt returns the failed login attempt repository for transaction
+func (t *transaction) FailedLoginAttempt() FailedLoginAttemptRepository {
+	return t.failedAttemptRepo
+}
+
 // Migrate runs database migrations
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	// Auto migrate all models
+	if err := db.AutoMigrate(
 		&models.Tenant{},
 		&models.User{},
 		&models.UserSession{},
 		&models.RefreshToken{},
 		&models.PasswordReset{},
-	)
+		&models.FailedLoginAttempt{},
+	); err != nil {
+		return err
+	}
+
+	// Create composite indexes
+	return createIndexes(db)
+}
+
+// createIndexes creates additional indexes not covered by AutoMigrate
+func createIndexes(db *gorm.DB) error {
+	// Composite index for users(email, tenant_id) for faster tenant-specific email lookups
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email_tenant ON users(email, tenant_id)").Error; err != nil {
+		return fmt.Errorf("failed to create users email-tenant index: %w", err)
+	}
+
+	// Composite index for failed_login_attempts(email, ip_address, tenant_id, attempted_at) for account lockout queries
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_failed_attempts_lookup ON failed_login_attempts(email, ip_address, tenant_id, attempted_at DESC)").Error; err != nil {
+		return fmt.Errorf("failed to create failed login attempts index: %w", err)
+	}
+
+	// Composite index for user_sessions(user_id, expires_at) for session cleanup and user session queries
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_user_expires ON user_sessions(user_id, expires_at)").Error; err != nil {
+		return fmt.Errorf("failed to create user sessions index: %w", err)
+	}
+
+	return nil
 }

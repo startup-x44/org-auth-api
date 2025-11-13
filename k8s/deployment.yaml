@@ -1,0 +1,284 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: auth-service
+  labels:
+    app: auth-service
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+        version: v1
+    spec:
+      containers:
+      - name: auth-service
+        image: auth-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        # ConfigMap references
+        - name: SERVER_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: SERVER_PORT
+        - name: SERVER_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: SERVER_HOST
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: ENVIRONMENT
+        - name: JWT_ACCESS_TOKEN_EXPIRY
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: JWT_ACCESS_TOKEN_EXPIRY
+        - name: JWT_REFRESH_TOKEN_EXPIRY
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: JWT_REFRESH_TOKEN_EXPIRY
+        - name: JWT_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: JWT_ISSUER
+        - name: RATE_LIMIT_LOGIN_ATTEMPTS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: RATE_LIMIT_LOGIN_ATTEMPTS
+        - name: RATE_LIMIT_PASSWORD_RESET
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: RATE_LIMIT_PASSWORD_RESET
+        - name: RATE_LIMIT_API_CALLS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: RATE_LIMIT_API_CALLS
+        - name: RATE_LIMIT_REGISTRATION
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: RATE_LIMIT_REGISTRATION
+        - name: MAX_CONCURRENT_SESSIONS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: MAX_CONCURRENT_SESSIONS
+        - name: EMAIL_PROVIDER
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: EMAIL_PROVIDER
+        - name: EMAIL_FROM_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: EMAIL_FROM_NAME
+        - name: PASSWORD_RESET_URL
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: PASSWORD_RESET_URL
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: LOG_LEVEL
+        - name: DATABASE_SSLMODE
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: DATABASE_SSLMODE
+        - name: DATABASE_MAX_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: DATABASE_MAX_CONNECTIONS
+        - name: DATABASE_MAX_IDLE_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: DATABASE_MAX_IDLE_CONNECTIONS
+        - name: DATABASE_CONNECTION_MAX_LIFETIME
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: DATABASE_CONNECTION_MAX_LIFETIME
+        - name: REDIS_DB
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: REDIS_DB
+        - name: REDIS_POOL_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: REDIS_POOL_SIZE
+        - name: REDIS_MIN_IDLE_CONNS
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: REDIS_MIN_IDLE_CONNS
+        - name: REDIS_CONN_MAX_LIFETIME
+          valueFrom:
+            configMapKeyRef:
+              name: auth-service-config
+              key: REDIS_CONN_MAX_LIFETIME
+
+        # Secret references
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: JWT_SECRET
+        - name: DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: DATABASE_HOST
+        - name: DATABASE_PORT
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: DATABASE_PORT
+        - name: DATABASE_USER
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: DATABASE_USER
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: DATABASE_PASSWORD
+        - name: DATABASE_NAME
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: DATABASE_NAME
+        - name: REDIS_HOST
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: REDIS_PORT
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: REDIS_PASSWORD
+        - name: EMAIL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: EMAIL_API_KEY
+        - name: EMAIL_FROM_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: EMAIL_FROM_EMAIL
+        - name: APP_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: auth-service-secret
+              key: APP_SECRET_KEY
+
+        # Resource limits
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+
+        # Volume mounts for temporary files
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: cache-volume
+          mountPath: /app/cache
+
+      # Volumes
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: cache-volume
+        emptyDir: {}
+
+      # Security context for the pod
+      securityContext:
+        fsGroup: 1001
+
+      # Node affinity and tolerations can be added here for production
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - auth-service
+              topologyKey: kubernetes.io/hostname

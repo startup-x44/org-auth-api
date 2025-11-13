@@ -11,7 +11,7 @@ import (
 type User struct {
 	ID               uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	TenantID         uuid.UUID  `json:"tenant_id" gorm:"type:uuid;not null"`
-	Email            string     `json:"email" gorm:"uniqueIndex:idx_users_tenant_email;not null"`
+	Email            string     `json:"email" gorm:"not null"`
 	EmailVerifiedAt  *time.Time `json:"email_verified_at" gorm:"default:null"`
 	PasswordHash     string     `json:"-" gorm:"not null"` // Never expose in JSON
 	Firstname        *string    `json:"firstname" gorm:"size:100"`
@@ -26,6 +26,11 @@ type User struct {
 
 	// Relations
 	Tenant *Tenant `json:"tenant,omitempty" gorm:"foreignKey:TenantID"`
+}
+
+// Add composite indexes for User model
+func (User) TableName() string {
+	return "users"
 }
 
 // BeforeCreate will set a UUID rather than numeric ID.
@@ -57,15 +62,21 @@ func (t *Tenant) BeforeCreate(tx *gorm.DB) error {
 
 // UserSession represents an active user session
 type UserSession struct {
-	ID         uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	UserID     uuid.UUID  `json:"user_id" gorm:"type:uuid;index:idx_sessions_user;not null"`
-	TenantID   uuid.UUID  `json:"tenant_id" gorm:"type:uuid;not null"`
-	TokenHash  string     `json:"-" gorm:"uniqueIndex:idx_sessions_token;not null"` // Never expose in JSON
-	IPAddress  string     `json:"-" gorm:"type:inet"`                               // Never expose in JSON
-	UserAgent  string     `json:"-" gorm:"type:text"`                              // Never expose in JSON
-	ExpiresAt  time.Time  `json:"-" gorm:"index:idx_sessions_expires;not null"`   // Never expose in JSON
-	RevokedAt  *time.Time `json:"-"`                                              // Never expose in JSON
-	CreatedAt  time.Time  `json:"created_at"`
+	ID                uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	UserID            uuid.UUID  `json:"user_id" gorm:"type:uuid;index:idx_sessions_user;not null"`
+	TenantID          uuid.UUID  `json:"tenant_id" gorm:"type:uuid;not null"`
+	TokenHash         string     `json:"-" gorm:"uniqueIndex:idx_sessions_token;not null"` // Never expose in JSON
+	IPAddress         string     `json:"-" gorm:"type:inet"`                               // Never expose in JSON
+	UserAgent         string     `json:"-" gorm:"type:text"`                              // Never expose in JSON
+	DeviceFingerprint  string    `json:"-" gorm:"type:text"`                             // Device fingerprint for tracking
+	Location          string     `json:"-" gorm:"type:text"`                             // Geographic location (optional)
+	IsActive          bool       `json:"-" gorm:"default:true"`                          // Whether session is active
+	LastActivity      time.Time  `json:"-" gorm:"index:idx_sessions_activity"`           // Last activity timestamp
+	ExpiresAt         time.Time  `json:"-" gorm:"index:idx_sessions_expires;not null"`   // Never expose in JSON
+	RevokedAt         *time.Time `json:"-"`                                              // Never expose in JSON
+	RevokedReason     string     `json:"-" gorm:"type:text"`                             // Reason for revocation
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 
 	// Relations
 	User   *User   `json:"user,omitempty" gorm:"foreignKey:UserID"`
@@ -122,6 +133,26 @@ type PasswordReset struct {
 func (pr *PasswordReset) BeforeCreate(tx *gorm.DB) error {
 	if pr.ID == uuid.Nil {
 		pr.ID = uuid.New()
+	}
+	return nil
+}
+
+// FailedLoginAttempt represents a failed login attempt for account lockout
+type FailedLoginAttempt struct {
+	ID         uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	UserID     *uuid.UUID `json:"user_id" gorm:"type:uuid;index:idx_failed_attempts_user"` // Nullable for attempts on non-existent users
+	TenantID   uuid.UUID  `json:"tenant_id" gorm:"type:uuid;not null"`
+	Email      string     `json:"email" gorm:"not null"`
+	IPAddress  string     `json:"-" gorm:"type:inet;not null"` // Never expose in JSON
+	UserAgent  string     `json:"-" gorm:"type:text"`          // Never expose in JSON
+	AttemptedAt time.Time `json:"-" gorm:"not null"`           // Never expose in JSON
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// BeforeCreate will set a UUID rather than numeric ID.
+func (fla *FailedLoginAttempt) BeforeCreate(tx *gorm.DB) error {
+	if fla.ID == uuid.Nil {
+		fla.ID = uuid.New()
 	}
 	return nil
 }

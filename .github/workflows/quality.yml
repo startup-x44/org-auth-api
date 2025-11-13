@@ -1,0 +1,136 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Check formatting
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "The following files are not formatted:"
+          gofmt -s -l .
+          exit 1
+        fi
+
+    - name: Check goimports
+      run: |
+        go install golang.org/x/tools/cmd/goimports@latest
+        if [ "$(goimports -l . | wc -l)" -gt 0 ]; then
+          echo "The following files need goimports:"
+          goimports -l .
+          exit 1
+        fi
+
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Install quality tools
+      run: |
+        go install github.com/uudashr/gopkgs/v2/cmd/gopkgs@latest
+        go install github.com/ramya-rao-a/go-outline@latest
+        go install github.com/cweill/gotests/gotests@latest
+        go install github.com/fatih/gomodifytags@latest
+        go install github.com/josharian/impl@latest
+        go install github.com/haya14busa/goplay/cmd/goplay@latest
+        go install github.com/go-delve/delve/cmd/dlv@latest
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Run staticcheck
+      run: staticcheck ./...
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Check for ineffective assignments
+      run: |
+        go install github.com/gordonklaus/ineffassign@latest
+        ineffassign ./...
+
+    - name: Check for misspellings
+      run: |
+        go install github.com/client9/misspell/cmd/misspell@latest
+        misspell -error .
+
+  complexity:
+    name: Complexity Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Install gocyclo
+      run: go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+
+    - name: Check cyclomatic complexity
+      run: |
+        # Allow complexity up to 15, fail if any function exceeds 20
+        if gocyclo -over 20 .; then
+          echo "Functions with cyclomatic complexity > 20 found:"
+          gocyclo -over 20 .
+          exit 1
+        fi
+
+        # Warn about functions with complexity > 15
+        echo "Functions with cyclomatic complexity > 15:"
+        gocyclo -over 15 .
+
+  coverage:
+    name: Coverage Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Run tests with coverage
+      run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Check coverage threshold
+      run: |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+        THRESHOLD=80.0
+
+        echo "Total coverage: $COVERAGE%"
+        echo "Required threshold: $THRESHOLD%"
+
+        if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+          echo "Coverage $COVERAGE% is below threshold $THRESHOLD%"
+          exit 1
+        fi

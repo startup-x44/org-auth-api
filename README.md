@@ -1,6 +1,6 @@
 # SaaS Authentication Microservice
 
-A production-ready authentication microservice built with Go, providing multi-tenant user management, JWT authentication, and comprehensive security features.
+A production-ready authentication microservice built with Go, providing multi-tenant user management, JWT authentication, and comprehensive security features for the Blocksure platform.
 
 ## Features
 
@@ -12,22 +12,25 @@ A production-ready authentication microservice built with Go, providing multi-te
 - **Password Reset**: Secure token-based password reset flow
 - **Rate Limiting**: Configurable rate limiting for API protection
 - **Admin Panel**: Administrative functions for user and tenant management
+- **Database Seeding**: Automated test data seeding for development
+- **Comprehensive Testing**: Unit and feature tests with isolated databases
 - **Health Checks**: Comprehensive health monitoring
 - **Docker Support**: Containerized deployment with docker-compose
 
 ## Tech Stack
 
-- **Backend**: Go 1.21, Gin web framework
+- **Backend**: Go 1.23, Gin web framework
 - **Database**: PostgreSQL with GORM ORM
 - **Cache**: Redis for session management
 - **Security**: JWT with RSA signing, Argon2id password hashing
+- **Testing**: Testify, isolated test databases
 - **Container**: Docker with multi-stage builds
 
 ## Quick Start
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.23+
 - PostgreSQL 15+
 - Redis 7+
 - Docker & Docker Compose (optional)
@@ -64,16 +67,77 @@ A production-ready authentication microservice built with Go, providing multi-te
    createuser auth_user --password
    ```
 
-4. **Run with Docker Compose:**
+4. **Quick development start (recommended):**
    ```bash
-   docker-compose up -d
+   ./dev.sh dev
    ```
 
-5. **Run locally:**
+5. **Manual Docker Compose commands:**
+   ```bash
+   # Development with live reload
+   docker-compose -f docker-compose.dev.yml up --build
+
+   # Production
+   docker-compose up --build
+   ```
+
+6. **Run locally:**
    ```bash
    go mod tidy
    go run cmd/server/main.go
    ```
+
+### Development with Live Reload
+
+For development with automatic code reloading:
+
+1. **Use the development Docker Compose:**
+   ```bash
+   docker-compose -f docker-compose.dev.yml up --build
+   ```
+
+2. **Or run locally with air:**
+   ```bash
+   # Install air globally
+   go install github.com/cosmtrek/air@latest
+
+   # Run with live reload
+   air
+   ```
+
+The development setup includes:
+- **Live reload** using `CompileDaemon` - automatically rebuilds and restarts on code changes
+- **Volume mounting** - source code changes are reflected instantly
+- **Dependency caching** - Go modules are cached for faster rebuilds
+- **Same services** - PostgreSQL and Redis are included in the dev environment
+
+### Production Deployment
+
+For production deployment, use the standard setup:
+
+## Seeded Test Data
+
+The service automatically seeds test data on startup for development:
+
+### Tenants
+- `default.local` - Default Organization
+- `demo.company.com` - Demo Company
+- `test.org` - Test Organization
+
+### Users (All tenants have similar user sets)
+
+| Email | Password | User Type | Description |
+|-------|----------|-----------|-------------|
+| `admin@{tenant}` | `Admin123!` | Admin | Administrative access |
+| `student@{tenant}` | `Student123!` | Student | Student user |
+| `rto@{tenant}` | `RTO123!` | RTO | Registered Training Organization |
+
+### Example Login
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@default.local", "password": "Admin123!", "tenant_id": "default.local"}'
+```
 
 ## API Documentation
 
@@ -232,37 +296,79 @@ Content-Type: application/json
 - `token` (String)
 - `expires_at` (Timestamp)
 
+## Documentation
+
+- **[API Specification](docs/api-spec.yaml)** - OpenAPI 3.0 specification
+- **[Postman Collection](docs/postman-collection.json)** - API testing collection
+- **[Architecture Guide](docs/architecture.md)** - System design and patterns
+- **[Deployment Guide](docs/deployment.md)** - Production deployment instructions
+- **[Development Guide](docs/development.md)** - Development setup and workflow
+- **[Security Review](docs/SECURITY_CODE_REVIEW_REPORT.md)** - Security assessment report
+
 ## Development
 
-### Project Structure
-```
-auth-service/
-├── cmd/server/           # Application entry point
-├── internal/
-│   ├── config/          # Configuration management
-│   ├── handler/         # HTTP handlers
-│   ├── middleware/      # HTTP middleware
-│   ├── models/          # Data models
-│   ├── repository/      # Data access layer
-│   └── service/         # Business logic layer
-├── pkg/
-│   ├── jwt/            # JWT utilities
-│   ├── password/       # Password utilities
-│   └── validation/     # Input validation
-├── docker-compose.yml   # Development environment
-├── Dockerfile          # Container definition
-├── go.mod             # Go modules
-└── README.md          # This file
+### Development Script
+
+Use the included `dev.sh` script for common development tasks:
+
+```bash
+# Start development environment with live reload
+./dev.sh dev
+
+# Start in background
+./dev.sh dev-d
+
+# Stop development environment
+./dev.sh stop
+
+# Run tests
+./dev.sh test
+
+# View logs
+./dev.sh logs
+
+# Open shell in container
+./dev.sh shell
+
+# Clean up (removes containers and volumes)
+./dev.sh clean
 ```
 
 ### Running Tests
+
+The project includes comprehensive testing with isolated databases:
+
 ```bash
-go test ./...
+# Run all tests
+docker-compose -f docker-compose.test.yml up --abort-on-container-exit
+
+# Run specific test types
+docker-compose -f docker-compose.test.yml run --rm auth-service-test go test ./tests/unit/... -v
+docker-compose -f docker-compose.test.yml run --rm auth-service-test go test ./tests/feature/... -v
+
+# Run tests locally (requires Go and PostgreSQL)
+go test ./tests/... -v
 ```
 
+### Database Seeding
+
+The application automatically seeds development data on startup:
+
+- **Tenants**: Default, Demo, and Test organizations
+- **Users**: Admin, Student, and RTO accounts for each tenant
+- **Sessions**: Sample session data for testing
+
 ### Building for Production
+
 ```bash
+# Build the application
 go build -o auth-service ./cmd/server
+
+# Build Docker image
+docker build -t auth-service .
+
+# Run container
+docker run -p 8080:8080 auth-service
 ```
 
 ## Deployment

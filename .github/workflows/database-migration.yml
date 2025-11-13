@@ -1,0 +1,92 @@
+name: Database Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      migration_command:
+        description: 'Migration command to run'
+        required: true
+        default: 'up'
+        type: choice
+        options:
+        - up
+        - down
+        - status
+        - create
+
+jobs:
+  migrate-database:
+    name: Run Database Migration
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+    - name: Run database migration
+      run: |
+        # Get the migration job pod
+        MIGRATION_POD=$(kubectl get pods -l app=auth-service-migration -o jsonpath='{.items[0].metadata.name}' -n ${{ inputs.environment }})
+
+        if [ "${{ inputs.migration_command }}" = "up" ]; then
+          kubectl exec $MIGRATION_POD -n ${{ inputs.environment }} -- go run migrations/migrate.go up
+        elif [ "${{ inputs.migration_command }}" = "down" ]; then
+          kubectl exec $MIGRATION_POD -n ${{ inputs.environment }} -- go run migrations/migrate.go down
+        elif [ "${{ inputs.migration_command }}" = "status" ]; then
+          kubectl exec $MIGRATION_POD -n ${{ inputs.environment }} -- go run migrations/migrate.go status
+        elif [ "${{ inputs.migration_command }}" = "create" ]; then
+          kubectl exec $MIGRATION_POD -n ${{ inputs.environment }} -- go run migrations/migrate.go create ${{ inputs.migration_name }}
+        fi
+
+    - name: Verify migration success
+      run: |
+        # Check if migration completed successfully
+        kubectl logs $MIGRATION_POD -n ${{ inputs.environment }} --tail=50
+
+    - name: Notify on completion
+      if: success()
+      run: |
+        echo "Database migration completed successfully in ${{ inputs.environment }}"
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "Database migration failed in ${{ inputs.environment }}. Please check the logs."
+
+  rollback-on-failure:
+    name: Rollback Migration
+    runs-on: ubuntu-latest
+    needs: migrate-database
+    if: failure() && inputs.migration_command == 'up'
+
+    steps:
+    - name: Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+    - name: Run rollback migration
+      run: |
+        MIGRATION_POD=$(kubectl get pods -l app=auth-service-migration -o jsonpath='{.items[0].metadata.name}' -n ${{ inputs.environment }})
+        kubectl exec $MIGRATION_POD -n ${{ inputs.environment }} -- go run migrations/migrate.go down
+
+    - name: Notify rollback
+      run: |
+        echo "Migration rolled back due to failure"

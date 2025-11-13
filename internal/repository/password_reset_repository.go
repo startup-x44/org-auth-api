@@ -63,11 +63,11 @@ func (r *passwordResetRepository) GetByEmail(ctx context.Context, email, tenantI
 
 // Update updates a password reset
 func (r *passwordResetRepository) Update(ctx context.Context, reset *models.PasswordReset) error {
-	if reset == nil || reset.Token == "" {
+	if reset == nil || reset.TokenHash == "" {
 		return errors.New("password reset and token are required")
 	}
 
-	result := r.db.WithContext(ctx).Model(reset).Where("token = ?", reset.Token).Updates(reset)
+	result := r.db.WithContext(ctx).Model(reset).Where("token_hash = ?", reset.TokenHash).Updates(reset)
 	if result.Error != nil {
 		return result.Error
 	}

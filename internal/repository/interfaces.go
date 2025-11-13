@@ -15,7 +15,7 @@ type UserRepository interface {
 	GetByEmailAndType(ctx context.Context, email, userType, tenantID string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
 	Delete(ctx context.Context, id string) error
-	List(ctx context.Context, tenantID string, limit, offset int) ([]*models.User, error)
+	List(ctx context.Context, tenantID string, limit int, cursor string) ([]*models.User, error)
 	Count(ctx context.Context, tenantID string) (int64, error)
 	UpdateLastLogin(ctx context.Context, id string) error
 	UpdatePassword(ctx context.Context, id, hashedPassword string) error
@@ -38,13 +38,21 @@ type TenantRepository interface {
 type UserSessionRepository interface {
 	Create(ctx context.Context, session *models.UserSession) error
 	GetByID(ctx context.Context, id string) (*models.UserSession, error)
+	GetByToken(ctx context.Context, token string) (*models.UserSession, error)
 	GetByUserID(ctx context.Context, userID string) ([]*models.UserSession, error)
 	GetActiveByUserID(ctx context.Context, userID string) ([]*models.UserSession, error)
-	Update(ctx context.Context, session *models.UserSession) error
+	GetActiveCountByUserID(ctx context.Context, userID string) (int64, error)
+	UpdateActivity(ctx context.Context, id string) error
+	Revoke(ctx context.Context, id string, reason string) error
+	RevokeByUserID(ctx context.Context, userID string, reason string) error
+	RevokeExpired(ctx context.Context) error
+	RevokeInactive(ctx context.Context, maxInactive time.Duration) error
 	Delete(ctx context.Context, id string) error
 	DeleteByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) error
 	CleanupExpired(ctx context.Context, maxAge time.Duration) error
+	GetSessionsByIPAddress(ctx context.Context, ipAddress string, since time.Time) ([]*models.UserSession, error)
+	GetSessionsByDeviceFingerprint(ctx context.Context, fingerprint string) ([]*models.UserSession, error)
 }
 
 // RefreshTokenRepository defines the interface for refresh token data operations
@@ -70,6 +78,15 @@ type PasswordResetRepository interface {
 	CleanupExpired(ctx context.Context, maxAge time.Duration) error
 }
 
+// FailedLoginAttemptRepository defines the interface for failed login attempt data operations
+type FailedLoginAttemptRepository interface {
+	Create(ctx context.Context, attempt *models.FailedLoginAttempt) error
+	GetByEmailAndIP(ctx context.Context, email, ipAddress, tenantID string, since time.Time) ([]*models.FailedLoginAttempt, error)
+	CountByEmailAndIP(ctx context.Context, email, ipAddress, tenantID string, since time.Time) (int64, error)
+	DeleteExpired(ctx context.Context, maxAge time.Duration) error
+	CleanupExpired(ctx context.Context, maxAge time.Duration) error
+}
+
 // Repository defines the interface for all repository operations
 type Repository interface {
 	User() UserRepository
@@ -77,6 +94,7 @@ type Repository interface {
 	UserSession() UserSessionRepository
 	RefreshToken() RefreshTokenRepository
 	PasswordReset() PasswordResetRepository
+	FailedLoginAttempt() FailedLoginAttemptRepository
 	BeginTransaction(ctx context.Context) (Transaction, error)
 }
 
@@ -89,4 +107,5 @@ type Transaction interface {
 	UserSession() UserSessionRepository
 	RefreshToken() RefreshTokenRepository
 	PasswordReset() PasswordResetRepository
+	FailedLoginAttempt() FailedLoginAttemptRepository
 }

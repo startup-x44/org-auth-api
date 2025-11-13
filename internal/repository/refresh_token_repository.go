@@ -60,11 +60,11 @@ func (r *refreshTokenRepository) GetByUserID(ctx context.Context, userID string)
 
 // Update updates a refresh token
 func (r *refreshTokenRepository) Update(ctx context.Context, token *models.RefreshToken) error {
-	if token == nil || token.Token == "" {
+	if token == nil || token.TokenHash == "" {
 		return errors.New("refresh token and token string are required")
 	}
 
-	result := r.db.WithContext(ctx).Model(token).Where("token = ?", token.Token).Updates(token)
+	result := r.db.WithContext(ctx).Model(token).Where("token_hash = ?", token.TokenHash).Updates(token)
 	if result.Error != nil {
 		return result.Error
 	}

@@ -8,6 +8,7 @@ import (
 
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
+	"auth-service/pkg/logger"
 	"auth-service/pkg/validation"
 )
 
@@ -52,21 +53,27 @@ type TenantListResponse struct {
 
 // tenantService implements TenantService interface
 type tenantService struct {
-	repo repository.Repository
+	repo        repository.Repository
+	auditLogger *logger.AuditLogger
 }
 
 // NewTenantService creates a new tenant service
 func NewTenantService(repo repository.Repository) TenantService {
-	return &tenantService{repo: repo}
+	return &tenantService{
+		repo:        repo,
+		auditLogger: logger.NewAuditLogger(),
+	}
 }
 
 // CreateTenant creates a new tenant
 func (s *tenantService) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 	// Validate request
 	if err := validation.ValidateTenantName(req.Name); err != nil {
+		s.auditLogger.LogTenantAction("system", "create_tenant", "", getClientIP(ctx), getUserAgent(ctx), false, fmt.Errorf("invalid tenant name: %w", err), fmt.Sprintf("name=%s, domain=%s", req.Name, req.Domain))
 		return nil, fmt.Errorf("invalid tenant name: %w", err)
 	}
 	if err := validation.ValidateTenantDomain(req.Domain); err != nil {
+		s.auditLogger.LogTenantAction("system", "create_tenant", "", getClientIP(ctx), getUserAgent(ctx), false, fmt.Errorf("invalid domain: %w", err), fmt.Sprintf("name=%s, domain=%s", req.Name, req.Domain))
 		return nil, fmt.Errorf("invalid domain: %w", err)
 	}
 
@@ -77,9 +84,11 @@ func (s *tenantService) CreateTenant(ctx context.Context, req *CreateTenantReque
 	}
 
 	if err := s.repo.Tenant().Create(ctx, tenant); err != nil {
+		s.auditLogger.LogTenantAction("system", "create_tenant", "", getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("name=%s, domain=%s", req.Name, req.Domain))
 		return nil, fmt.Errorf("failed to create tenant: %w", err)
 	}
 
+	s.auditLogger.LogTenantAction("system", "create_tenant", tenant.ID.String(), getClientIP(ctx), getUserAgent(ctx), true, nil, fmt.Sprintf("name=%s, domain=%s", req.Name, req.Domain))
 	return s.convertToTenantResponse(tenant), nil
 }
 
@@ -120,12 +129,14 @@ func (s *tenantService) UpdateTenant(ctx context.Context, tenantID string, req *
 	// Get current tenant
 	tenant, err := s.repo.Tenant().GetByID(ctx, tenantID)
 	if err != nil {
+		s.auditLogger.LogTenantAction("system", "update_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Tenant not found")
 		return nil, fmt.Errorf("tenant not found: %w", err)
 	}
 
 	// Validate and update fields
 	if req.Name != "" {
 		if err := validation.ValidateTenantName(req.Name); err != nil {
+			s.auditLogger.LogTenantAction("system", "update_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("Invalid name: %s", req.Name))
 			return nil, fmt.Errorf("invalid tenant name: %w", err)
 		}
 		tenant.Name = req.Name
@@ -133,6 +144,7 @@ func (s *tenantService) UpdateTenant(ctx context.Context, tenantID string, req *
 
 	if req.Domain != "" {
 		if err := validation.ValidateTenantDomain(req.Domain); err != nil {
+			s.auditLogger.LogTenantAction("system", "update_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("Invalid domain: %s", req.Domain))
 			return nil, fmt.Errorf("invalid domain: %w", err)
 		}
 		tenant.Domain = req.Domain
@@ -140,9 +152,11 @@ func (s *tenantService) UpdateTenant(ctx context.Context, tenantID string, req *
 
 	// Save changes
 	if err := s.repo.Tenant().Update(ctx, tenant); err != nil {
+		s.auditLogger.LogTenantAction("system", "update_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to save changes")
 		return nil, fmt.Errorf("failed to update tenant: %w", err)
 	}
 
+	s.auditLogger.LogTenantAction("system", "update_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), true, nil, "Tenant updated successfully")
 	return s.convertToTenantResponse(tenant), nil
 }
 
@@ -155,14 +169,23 @@ func (s *tenantService) DeleteTenant(ctx context.Context, tenantID string) error
 	// Check if tenant has users
 	userCount, err := s.repo.User().Count(ctx, tenantID)
 	if err != nil {
+		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to check tenant users")
 		return fmt.Errorf("failed to check tenant users: %w", err)
 	}
 
 	if userCount > 0 {
-		return errors.New("cannot delete tenant with existing users")
+		err := errors.New("cannot delete tenant with existing users")
+		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("Tenant has %d users", userCount))
+		return err
 	}
 
-	return s.repo.Tenant().Delete(ctx, tenantID)
+	if err := s.repo.Tenant().Delete(ctx, tenantID); err != nil {
+		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to delete tenant")
+		return err
+	}
+
+	s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), true, nil, "Tenant deleted successfully")
+	return nil
 }
 
 // ListTenants lists tenants with pagination
@@ -193,10 +216,26 @@ func (s *tenantService) ListTenants(ctx context.Context, limit, offset int) (*Te
 // convertToTenantResponse converts model to response
 func (s *tenantService) convertToTenantResponse(tenant *models.Tenant) *TenantResponse {
 	return &TenantResponse{
-		ID:        tenant.ID,
+		ID:        tenant.ID.String(),
 		Name:      tenant.Name,
 		Domain:    tenant.Domain,
 		CreatedAt: tenant.CreatedAt,
 		UpdatedAt: tenant.UpdatedAt,
 	}
+}
+
+// Helper functions
+
+// getClientIP extracts client IP from context (simplified)
+func getClientIP(ctx context.Context) string {
+	// In a real implementation, extract from gin.Context or HTTP headers
+	// For now, return a placeholder
+	return "127.0.0.1"
+}
+
+// getUserAgent extracts user agent from context (simplified)
+func getUserAgent(ctx context.Context) string {
+	// In a real implementation, extract from gin.Context
+	// For now, return a placeholder
+	return "unknown"
 }

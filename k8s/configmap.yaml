@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+  namespace: auth-service
+  labels:
+    app: auth-service
+data:
+  # Server Configuration
+  SERVER_PORT: "8080"
+  SERVER_HOST: "0.0.0.0"
+
+  # Environment
+  ENVIRONMENT: "production"
+
+  # JWT Configuration
+  JWT_ACCESS_TOKEN_EXPIRY: "60"  # minutes
+  JWT_REFRESH_TOKEN_EXPIRY: "30" # days
+  JWT_ISSUER: "auth-service"
+
+  # Rate Limiting
+  RATE_LIMIT_LOGIN_ATTEMPTS: "5"
+  RATE_LIMIT_PASSWORD_RESET: "3"
+  RATE_LIMIT_API_CALLS: "1000"
+  RATE_LIMIT_REGISTRATION: "10"
+  MAX_CONCURRENT_SESSIONS: "5"
+
+  # Email Configuration
+  EMAIL_PROVIDER: "sendgrid"
+  EMAIL_FROM_NAME: "Auth Service"
+  PASSWORD_RESET_URL: "https://app.example.com/reset-password"
+
+  # Logging
+  LOG_LEVEL: "info"
+
+  # Database Configuration (connection details in secret)
+  DATABASE_SSLMODE: "require"
+  DATABASE_MAX_CONNECTIONS: "10"
+  DATABASE_MAX_IDLE_CONNECTIONS: "5"
+  DATABASE_CONNECTION_MAX_LIFETIME: "300"
+
+  # Redis Configuration (connection details in secret)
+  REDIS_DB: "0"
+  REDIS_POOL_SIZE: "10"
+  REDIS_MIN_IDLE_CONNS: "5"
+  REDIS_CONN_MAX_LIFETIME: "300"

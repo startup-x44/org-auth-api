@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"auth-service/internal/models"
@@ -34,7 +35,7 @@ func (r *userRepository) Create(ctx context.Context, user *models.User) error {
 
 	// Check if user with same email and type already exists in tenant
 	var existingUser models.User
-	result := r.db.WithContext(ctx).Where("email = ? AND type = ? AND tenant_id = ?", user.Email, user.Type, user.TenantID).First(&existingUser)
+	result := r.db.WithContext(ctx).Where("email = ? AND user_type = ? AND tenant_id = ?", user.Email, user.UserType, user.TenantID).First(&existingUser)
 	if result.Error == nil {
 		return ErrUserAlreadyExists
 	} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -79,7 +80,7 @@ func (r *userRepository) GetByEmailAndType(ctx context.Context, email, userType,
 	}
 
 	var user models.User
-	err := r.db.WithContext(ctx).Where("email = ? AND type = ? AND tenant_id = ?", email, userType, tenantID).First(&user).Error
+	err := r.db.WithContext(ctx).Where("email = ? AND user_type = ? AND tenant_id = ?", email, userType, tenantID).First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrUserNotFound
 	}
@@ -88,7 +89,7 @@ func (r *userRepository) GetByEmailAndType(ctx context.Context, email, userType,
 
 // Update updates a user
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
-	if user == nil || user.ID == "" {
+	if user == nil || user.ID == uuid.Nil {
 		return errors.New("user and user ID are required")
 	}
 
@@ -118,8 +119,8 @@ func (r *userRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// List retrieves users with pagination
-func (r *userRepository) List(ctx context.Context, tenantID string, limit, offset int) ([]*models.User, error) {
+// List retrieves users with cursor-based pagination
+func (r *userRepository) List(ctx context.Context, tenantID string, limit int, cursor string) ([]*models.User, error) {
 	if tenantID == "" {
 		return nil, errors.New("tenant ID is required")
 	}
@@ -127,14 +128,19 @@ func (r *userRepository) List(ctx context.Context, tenantID string, limit, offse
 	var users []*models.User
 	query := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID)
 
+	// Apply cursor condition if provided
+	if cursor != "" {
+		query = query.Where("id > ?", cursor)
+	}
+
+	// Order by created_at DESC, then by ID DESC for consistent pagination
+	query = query.Order("created_at DESC, id DESC")
+
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
-	if offset > 0 {
-		query = query.Offset(offset)
-	}
 
-	err := query.Order("created_at DESC").Find(&users).Error
+	err := query.Find(&users).Error
 	return users, err
 }
 
