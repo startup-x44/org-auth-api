@@ -8,7 +8,6 @@ const Register = () => {
     password: '',
     confirm_password: '',
     user_type: 'student',
-    tenant_id: '',
     first_name: '',
     last_name: '',
     phone: '',
@@ -68,22 +67,6 @@ const Register = () => {
           )}
 
           <div className="space-y-4">
-            <div>
-              <label htmlFor="tenant_id" className="block text-sm font-medium text-gray-700">
-                Tenant ID
-              </label>
-              <input
-                id="tenant_id"
-                name="tenant_id"
-                type="text"
-                required
-                className="input mt-1"
-                placeholder="Enter tenant ID"
-                value={formData.tenant_id}
-                onChange={handleChange}
-              />
-            </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label htmlFor="first_name" className="block text-sm font-medium text-gray-700">

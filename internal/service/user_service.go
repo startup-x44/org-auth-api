@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"auth-service/internal/models"
@@ -176,10 +177,38 @@ func (s *userService) Register(ctx context.Context, req *RegisterRequest) (*Regi
 		}
 	}
 
-	// Check if tenant exists
-	_, err := s.repo.Tenant().GetByID(ctx, req.TenantID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid tenant: %w", err)
+	// Handle tenant assignment
+	tenantID := req.TenantID
+	if tenantID == "" {
+		// Try to find tenant by email domain
+		emailDomain := extractDomainFromEmail(req.Email)
+		if emailDomain != "" {
+			tenant, err := s.repo.Tenant().GetByDomain(ctx, emailDomain)
+			if err == nil {
+				// Found tenant by domain
+				tenantID = tenant.ID
+			} else {
+				// No tenant found by domain, assign to default tenant
+				defaultTenant, err := s.getOrCreateDefaultTenant(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get default tenant: %w", err)
+				}
+				tenantID = defaultTenant.ID
+			}
+		} else {
+			// Invalid email format, assign to default tenant
+			defaultTenant, err := s.getOrCreateDefaultTenant(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get default tenant: %w", err)
+			}
+			tenantID = defaultTenant.ID
+		}
+	} else {
+		// Tenant ID provided, validate it exists
+		_, err := s.repo.Tenant().GetByID(ctx, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tenant: %w", err)
+		}
 	}
 
 	// Hash password
@@ -704,4 +733,34 @@ func generateSecureToken() string {
 	// TODO: Implement secure token generation
 	// For now, return a placeholder
 	return "secure-reset-token-placeholder"
+}
+
+// extractDomainFromEmail extracts domain from email address
+func extractDomainFromEmail(email string) string {
+	parts := strings.Split(email, "@")
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// getOrCreateDefaultTenant gets or creates a default tenant
+func (s *userService) getOrCreateDefaultTenant(ctx context.Context) (*models.Tenant, error) {
+	// Try to find existing default tenant
+	defaultTenant, err := s.repo.Tenant().GetByDomain(ctx, "default.local")
+	if err == nil {
+		return defaultTenant, nil
+	}
+
+	// Create default tenant if it doesn't exist
+	defaultTenant = &models.Tenant{
+		Name:   "Default Organization",
+		Domain: "default.local",
+	}
+
+	if err := s.repo.Tenant().Create(ctx, defaultTenant); err != nil {
+		return nil, fmt.Errorf("failed to create default tenant: %w", err)
+	}
+
+	return defaultTenant, nil
 }

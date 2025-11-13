@@ -65,10 +65,10 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('access_token', token.access_token);
       localStorage.setItem('refresh_token', token.refresh_token);
       localStorage.setItem('user', JSON.stringify(newUser));
-      localStorage.setItem('tenant_id', userData.tenant_id);
+      localStorage.setItem('tenant_id', newUser.tenant_id);
 
       setUser(newUser);
-      setTenantId(userData.tenant_id);
+      setTenantId(newUser.tenant_id);
 
       return { success: true };
     } catch (error) {

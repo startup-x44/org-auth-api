@@ -194,10 +194,7 @@ func ValidateUserRegistration(email, password, confirmPassword, userType, tenant
 		return err
 	}
 
-	if tenantID == "" {
-		return ErrInvalidTenantID
-	}
-
+	// Tenant ID is now optional - will be auto-assigned if not provided
 	return nil
 }
 
