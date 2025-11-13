@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 
 const AdminTenants = () => {
@@ -18,11 +18,7 @@ const AdminTenants = () => {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    fetchTenants();
-  }, [pagination.limit, pagination.offset]);
-
-  const fetchTenants = async () => {
+  const fetchTenants = useCallback(async () => {
     try {
       setLoading(true);
       const response = await adminAPI.listTenants({
@@ -41,7 +37,11 @@ const AdminTenants = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [pagination.limit, pagination.offset]);
+
+  useEffect(() => {
+    fetchTenants();
+  }, [fetchTenants]);
 
   const handleCreateTenant = async (e) => {
     e.preventDefault();

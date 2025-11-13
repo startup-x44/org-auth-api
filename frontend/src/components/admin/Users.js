@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../../services/api';
 
 const AdminUsers = () => {
@@ -12,11 +12,7 @@ const AdminUsers = () => {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    fetchUsers();
-  }, [pagination.limit, pagination.offset]);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
       const response = await adminAPI.listUsers({
@@ -35,7 +31,11 @@ const AdminUsers = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [pagination.limit, pagination.offset]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const handleActivateUser = async (userId) => {
     try {
