@@ -59,7 +59,7 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 func (m *AuthMiddleware) AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userType, exists := c.Request.Context().Value("user_type").(string)
-		if !exists || userType != "admin" {
+		if !exists || userType != "Admin" {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "Admin access required",
@@ -116,13 +116,33 @@ func (m *AuthMiddleware) extractToken(c *gin.Context) string {
 	return strings.TrimSpace(token)
 }
 
-// CORSMiddleware handles CORS headers
-func CORSMiddleware() gin.HandlerFunc {
+// CORSMiddleware handles CORS headers with tenant subdomain support
+func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+
+		// If no origin header, skip CORS processing
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		// Check if the origin is allowed
+		if !isOriginAllowed(origin, allowedOrigins) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "Origin not allowed",
+			})
+			c.Abort()
+			return
+		}
+
+		// Set CORS headers
+		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Tenant-ID")
-		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+		c.Header("Access-Control-Expose-Headers", "X-CSRF-Token, Authorization")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -131,6 +151,32 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// isOriginAllowed checks if an origin is allowed based on the configuration
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" {
+			return true
+		}
+
+		// Check for wildcard patterns like "*.sprout.com"
+		if strings.HasPrefix(allowed, "*.") {
+			baseDomain := strings.TrimPrefix(allowed, "*.")
+			if strings.HasSuffix(origin, baseDomain) {
+				// Ensure it's a subdomain (not the base domain itself unless explicitly allowed)
+				originWithoutProtocol := strings.TrimPrefix(origin, "http://")
+				originWithoutProtocol = strings.TrimPrefix(originWithoutProtocol, "https://")
+				if strings.Contains(originWithoutProtocol, ".") && strings.HasSuffix(originWithoutProtocol, baseDomain) {
+					return true
+				}
+			}
+		} else if allowed == origin {
+			// Exact match
+			return true
+		}
+	}
+	return false
 }
 
 // RateLimitMiddleware provides basic rate limiting (placeholder)

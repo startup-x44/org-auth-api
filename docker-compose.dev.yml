@@ -10,6 +10,7 @@ services:
     environment:
       - SERVER_PORT=8080
       - ENVIRONMENT=development
+      - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,*.localhost:3000
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=auth_user

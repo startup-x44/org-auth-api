@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
 	"auth-service/pkg/email"
@@ -16,6 +14,9 @@ import (
 	"auth-service/pkg/logger"
 	"auth-service/pkg/password"
 	"auth-service/pkg/validation"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
 // UserService defines the interface for user business logic
@@ -46,7 +47,8 @@ type RegisterRequest struct {
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
 	UserType        string `json:"user_type"`
-	TenantID        string `json:"tenant_id"`
+	TenantID        string `json:"tenant_id,omitempty"`        // UUID or domain
+	TenantSubdomain string `json:"tenant_subdomain,omitempty"` // NEW: For subdomain-based tenancy
 	FirstName       string `json:"first_name,omitempty"`
 	LastName        string `json:"last_name,omitempty"`
 	Phone           string `json:"phone,omitempty"`
@@ -90,16 +92,16 @@ type LogoutRequest struct {
 
 // UserProfile represents user profile information
 type UserProfile struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	UserType  string    `json:"user_type"`
-	TenantID  string    `json:"tenant_id"`
-	FirstName string    `json:"first_name,omitempty"`
-	LastName  string    `json:"last_name,omitempty"`
-	Phone     string    `json:"phone,omitempty"`
-	IsActive  bool      `json:"is_active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string     `json:"id"`
+	Email     string     `json:"email"`
+	UserType  string     `json:"user_type"`
+	TenantID  string     `json:"tenant_id"`
+	FirstName string     `json:"first_name,omitempty"`
+	LastName  string     `json:"last_name,omitempty"`
+	Phone     string     `json:"phone,omitempty"`
+	IsActive  bool       `json:"is_active"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	LastLogin *time.Time `json:"last_login,omitempty"`
 }
 
@@ -259,23 +261,69 @@ func (s *userService) validateOptionalProfileFields(req *RegisterRequest) error 
 
 // resolveTenantForRegistration determines the tenant for the new user
 func (s *userService) resolveTenantForRegistration(ctx context.Context, req *RegisterRequest) (string, error) {
-	// If tenant ID is provided, validate it
+	// Priority 1: Explicit tenant subdomain (e.g., "fligno")
+	if req.TenantSubdomain != "" {
+		return s.resolveTenantBySubdomain(ctx, req.TenantSubdomain)
+	}
+
+	// Priority 2: Explicit tenant ID/domain provided
 	if req.TenantID != "" {
 		return s.validateProvidedTenantID(ctx, req.TenantID)
 	}
 
-	// Auto-assign tenant based on email domain
+	// Priority 3: Auto-assign based on email domain (fallback)
 	return s.autoAssignTenantByEmailDomain(ctx, req.Email)
 }
 
-// validateProvidedTenantID validates a tenant ID provided in the request
+// validateProvidedTenantID validates that a provided tenant ID exists and is active
 func (s *userService) validateProvidedTenantID(ctx context.Context, tenantID string) (string, error) {
-	_, err := s.repo.Tenant().GetByID(ctx, tenantID)
-	// _, err := s.repo.Tenant().GetByID(ctx, tenantID)
-	if err != nil {
-		return "", fmt.Errorf("invalid tenant: %w", err)
+	if tenantID == "" {
+		return "", errors.New("tenant ID is required")
 	}
-	return tenantID, nil
+
+	// Try to parse as UUID first
+	if _, err := uuid.Parse(tenantID); err == nil {
+		// It's a valid UUID, verify tenant exists
+		tenant, err := s.repo.Tenant().GetByID(ctx, tenantID)
+		if err != nil {
+			return "", fmt.Errorf("invalid tenant ID: %w", err)
+		}
+		// TODO: Add tenant status check if tenants can be deactivated
+		return tenant.ID.String(), nil
+	}
+
+	// Not a UUID, treat as domain
+	tenant, err := s.repo.Tenant().GetByDomain(ctx, tenantID)
+	if err != nil {
+		return "", fmt.Errorf("invalid tenant domain: %w", err)
+	}
+	// TODO: Add tenant status check if tenants can be deactivated
+	return tenant.ID.String(), nil
+}
+
+// resolveTenantBySubdomain resolves tenant by subdomain (e.g., "fligno" -> "fligno.sprout.com")
+func (s *userService) resolveTenantBySubdomain(ctx context.Context, subdomain string) (string, error) {
+	// Construct full domain (subdomain + base domain)
+	baseDomain := "sprout.com" // Configure this in environment variables
+	fullDomain := fmt.Sprintf("%s.%s", subdomain, baseDomain)
+
+	// Try to find existing tenant
+	tenant, err := s.repo.Tenant().GetByDomain(ctx, fullDomain)
+	if err == nil {
+		return tenant.ID.String(), nil
+	}
+
+	// Create new tenant if it doesn't exist
+	newTenant := &models.Tenant{
+		Name:   fmt.Sprintf("%s Organization", strings.Title(subdomain)),
+		Domain: fullDomain,
+	}
+
+	if err := s.repo.Tenant().Create(ctx, newTenant); err != nil {
+		return "", fmt.Errorf("failed to create tenant for subdomain %s: %w", subdomain, err)
+	}
+
+	return newTenant.ID.String(), nil
 }
 
 // autoAssignTenantByEmailDomain automatically assigns tenant based on email domain
@@ -289,12 +337,8 @@ func (s *userService) autoAssignTenantByEmailDomain(ctx context.Context, email s
 		}
 	}
 
-	// Fall back to default tenant
-	defaultTenant, err := s.getOrCreateDefaultTenant(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get default tenant: %w", err)
-	}
-	return defaultTenant.ID.String(), nil
+	// Reject registration if no valid tenant found
+	return "", errors.New("no valid tenant found for email domain")
 }
 
 // createUserAccount creates the user account with hashed password
@@ -310,7 +354,7 @@ func (s *userService) createUserAccount(ctx context.Context, req *RegisterReques
 	user := &models.User{
 		Email:        req.Email,
 		PasswordHash: passwordHashResult.Hash,
-		UserType:     req.UserType,
+		UserType:     validation.NormalizeUserType(req.UserType),
 		TenantID:     uuid.MustParse(tenantID),
 		Firstname:    safeStringToPointer(req.FirstName),
 		Lastname:     safeStringToPointer(req.LastName),
@@ -788,13 +832,37 @@ func (s *userService) ListUsers(ctx context.Context, tenantID string, limit int,
 	}, nil
 }
 
+// getTenantID extracts tenant ID from context
+func getTenantID(ctx context.Context) string {
+	if tenantID, ok := ctx.Value("tenant_id").(string); ok {
+		return tenantID
+	}
+	return ""
+}
+
 // ActivateUser activates a user account
 func (s *userService) ActivateUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errors.New("user ID is required")
 	}
 
-	err := s.repo.User().Activate(ctx, userID)
+	// Get tenant ID from context for security validation
+	tenantID := getTenantID(ctx)
+	if tenantID == "" {
+		return errors.New("tenant context required")
+	}
+
+	// Verify the user belongs to the authenticated tenant
+	user, err := s.repo.User().GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	if user.TenantID.String() != tenantID {
+		return errors.New("user does not belong to your tenant")
+	}
+
+	err = s.repo.User().Activate(ctx, userID)
 	if err != nil {
 		s.auditLogger.LogAdminAction("system", "activate_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to activate user account")
 		return err
@@ -810,6 +878,22 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 		return errors.New("user ID is required")
 	}
 
+	// Get tenant ID from context for security validation
+	tenantID := getTenantID(ctx)
+	if tenantID == "" {
+		return errors.New("tenant context required")
+	}
+
+	// Verify the user belongs to the authenticated tenant
+	user, err := s.repo.User().GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	if user.TenantID.String() != tenantID {
+		return errors.New("user does not belong to your tenant")
+	}
+
 	// Invalidate all sessions and refresh tokens
 	if err := s.repo.UserSession().DeleteByUserID(ctx, userID); err != nil {
 		fmt.Printf("Failed to delete user sessions: %v\n", err)
@@ -818,7 +902,7 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 		fmt.Printf("Failed to delete refresh tokens: %v\n", err)
 	}
 
-	err := s.repo.User().Deactivate(ctx, userID)
+	err = s.repo.User().Deactivate(ctx, userID)
 	if err != nil {
 		s.auditLogger.LogAdminAction("system", "deactivate_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to deactivate user account")
 		return err
@@ -832,6 +916,22 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 func (s *userService) DeleteUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errors.New("user ID is required")
+	}
+
+	// Get tenant ID from context for security validation
+	tenantID := getTenantID(ctx)
+	if tenantID == "" {
+		return errors.New("tenant context required")
+	}
+
+	// Verify the user belongs to the authenticated tenant
+	user, err := s.repo.User().GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	if user.TenantID.String() != tenantID {
+		return errors.New("user does not belong to your tenant")
 	}
 
 	// Start transaction
@@ -1015,8 +1115,8 @@ func (s *userService) resolveTenantID(ctx context.Context, tenantID string) (str
 
 // Account lockout constants
 const (
-	MaxFailedAttempts = 5
-	LockoutDuration   = 15 * time.Minute
+	MaxFailedAttempts   = 5
+	LockoutDuration     = 15 * time.Minute
 	FailedAttemptWindow = 15 * time.Minute
 )
 
@@ -1044,11 +1144,11 @@ func (s *userService) isAccountLockedDB(ctx context.Context, email, ipAddress, t
 func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress, tenantID string, userID *uuid.UUID) {
 	// Record in database
 	attempt := &models.FailedLoginAttempt{
-		UserID:     userID,
-		TenantID:   uuid.MustParse(tenantID),
-		Email:      email,
-		IPAddress:  ipAddress,
-		UserAgent:  getUserAgent(ctx),
+		UserID:      userID,
+		TenantID:    uuid.MustParse(tenantID),
+		Email:       email,
+		IPAddress:   ipAddress,
+		UserAgent:   getUserAgent(ctx),
 		AttemptedAt: time.Now(),
 	}
 

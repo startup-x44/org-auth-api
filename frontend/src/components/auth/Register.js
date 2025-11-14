@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { resolveTenant, extractDomainFromEmail } from '../../utils/tenant';
 
 const Register = () => {
   const [formData, setFormData] = useState({
@@ -11,12 +12,23 @@ const Register = () => {
     first_name: '',
     last_name: '',
     phone: '',
+    tenant_id: '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resolvedTenant, setResolvedTenant] = useState('');
 
   const { register } = useAuth();
   const navigate = useNavigate();
+
+  // Auto-resolve tenant on component mount and email change
+  useEffect(() => {
+    const tenant = resolveTenant(formData.email);
+    if (tenant) {
+      setResolvedTenant(tenant);
+      setFormData(prev => ({ ...prev, tenant_id: tenant }));
+    }
+  }, [formData.email]);
 
   const handleChange = (e) => {
     setFormData({
@@ -29,6 +41,13 @@ const Register = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
+
+    // Validate tenant is resolved
+    if (!formData.tenant_id) {
+      setError('Unable to determine tenant. Please contact support.');
+      setLoading(false);
+      return;
+    }
 
     const result = await register(formData);
 
@@ -113,6 +132,17 @@ const Register = () => {
                 onChange={handleChange}
               />
             </div>
+
+            {resolvedTenant && (
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                <div className="text-sm text-blue-800">
+                  <strong>Organization:</strong> {resolvedTenant}
+                </div>
+                <div className="text-xs text-blue-600 mt-1">
+                  Registration is restricted to your organization's domain.
+                </div>
+              </div>
+            )}
 
             <div>
               <label htmlFor="user_type" className="block text-sm font-medium text-gray-700">

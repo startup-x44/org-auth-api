@@ -156,7 +156,7 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 	// Global middleware
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
-	router.Use(middleware.CORSMiddleware())
+	router.Use(middleware.CORSMiddleware(cfg.CORS.AllowedOrigins))
 	router.Use(middleware.RateLimitMiddleware())
 	router.Use(middleware.LoggingMiddleware())
 	router.Use(middleware.RecoveryMiddleware())

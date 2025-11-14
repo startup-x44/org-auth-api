@@ -123,6 +123,7 @@ func runMigrations(t *testing.T, db *gorm.DB) {
 		&models.UserSession{},
 		&models.RefreshToken{},
 		&models.PasswordReset{},
+		&models.FailedLoginAttempt{},
 	)
 	require.NoError(t, err)
 }
@@ -188,6 +189,7 @@ func CleanTestData(t *testing.T, db *gorm.DB) {
 
 	// Clean in order to respect foreign key constraints
 	tables := []string{
+		"failed_login_attempts",
 		"password_resets",
 		"refresh_tokens",
 		"user_sessions",

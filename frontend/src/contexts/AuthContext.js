@@ -16,15 +16,22 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [tenantId, setTenantId] = useState(null);
 
+  // Helper function to get tenant-specific localStorage key
+  const getStorageKey = (key, tenantId) => {
+    return tenantId ? `${key}_${tenantId}` : key;
+  };
+
   useEffect(() => {
     // Check if user is logged in on app start
-    const token = localStorage.getItem('access_token');
-    const storedUser = localStorage.getItem('user');
     const storedTenantId = localStorage.getItem('tenant_id');
+    if (storedTenantId) {
+      const token = localStorage.getItem(getStorageKey('access_token', storedTenantId));
+      const storedUser = localStorage.getItem(getStorageKey('user', storedTenantId));
 
-    if (token && storedUser) {
-      setUser(JSON.parse(storedUser));
-      setTenantId(storedTenantId);
+      if (token && storedUser) {
+        setUser(JSON.parse(storedUser));
+        setTenantId(storedTenantId);
+      }
     }
 
     setLoading(false);
@@ -40,10 +47,15 @@ export const AuthProvider = ({ children }) => {
 
       const { user: userData, token } = response.data.data;
 
-      localStorage.setItem('access_token', token.access_token);
-      localStorage.setItem('refresh_token', token.refresh_token);
-      localStorage.setItem('user', JSON.stringify(userData));
-      localStorage.setItem('tenant_id', tenantId);
+      // Use tenant-specific storage keys
+      const tokenKey = getStorageKey('access_token', tenantId);
+      const refreshKey = getStorageKey('refresh_token', tenantId);
+      const userKey = getStorageKey('user', tenantId);
+
+      localStorage.setItem(tokenKey, token.access_token);
+      localStorage.setItem(refreshKey, token.refresh_token);
+      localStorage.setItem(userKey, JSON.stringify(userData));
+      localStorage.setItem('tenant_id', tenantId); // Global tenant reference
 
       setUser(userData);
       setTenantId(tenantId);
@@ -59,13 +71,21 @@ export const AuthProvider = ({ children }) => {
 
   const register = async (userData) => {
     try {
-      const response = await authAPI.register(userData);
+      const response = await authAPI.register({
+        ...userData,
+        tenant_id: userData.tenant_id,
+      });
       const { user: newUser, token } = response.data.data;
 
-      localStorage.setItem('access_token', token.access_token);
-      localStorage.setItem('refresh_token', token.refresh_token);
-      localStorage.setItem('user', JSON.stringify(newUser));
-      localStorage.setItem('tenant_id', newUser.tenant_id);
+      // Use tenant-specific storage keys
+      const tokenKey = getStorageKey('access_token', newUser.tenant_id);
+      const refreshKey = getStorageKey('refresh_token', newUser.tenant_id);
+      const userKey = getStorageKey('user', newUser.tenant_id);
+
+      localStorage.setItem(tokenKey, token.access_token);
+      localStorage.setItem(refreshKey, token.refresh_token);
+      localStorage.setItem(userKey, JSON.stringify(newUser));
+      localStorage.setItem('tenant_id', newUser.tenant_id); // Global tenant reference
 
       setUser(newUser);
       setTenantId(newUser.tenant_id);
@@ -83,14 +103,17 @@ export const AuthProvider = ({ children }) => {
     try {
       await authAPI.logout({
         user_id: user?.id,
-        refresh_token: localStorage.getItem('refresh_token'),
+        refresh_token: localStorage.getItem(getStorageKey('refresh_token', tenantId)),
       });
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-      localStorage.removeItem('user');
+      // Clear tenant-specific storage
+      if (tenantId) {
+        localStorage.removeItem(getStorageKey('access_token', tenantId));
+        localStorage.removeItem(getStorageKey('refresh_token', tenantId));
+        localStorage.removeItem(getStorageKey('user', tenantId));
+      }
       localStorage.removeItem('tenant_id');
       setUser(null);
       setTenantId(null);
@@ -102,7 +125,7 @@ export const AuthProvider = ({ children }) => {
       const response = await authAPI.updateProfile(profileData);
       const updatedUser = response.data.data;
 
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      localStorage.setItem(getStorageKey('user', tenantId), JSON.stringify(updatedUser));
       setUser(updatedUser);
 
       return { success: true };
@@ -131,7 +154,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const isAuthenticated = () => {
-    return !!user && !!localStorage.getItem('access_token');
+    return !!user && !!tenantId && !!localStorage.getItem(getStorageKey('access_token', tenantId));
   };
 
   const value = {

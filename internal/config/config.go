@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -14,6 +15,7 @@ type Config struct {
 	Database    DatabaseConfig
 	Redis       RedisConfig
 	JWT         JWTConfig
+	CORS        CORSConfig
 	RateLimit   RateLimitConfig
 	Email       EmailConfig
 	Environment string
@@ -46,6 +48,10 @@ type JWTConfig struct {
 	RefreshTokenTTL int // in days
 	Issuer          string
 	SigningMethod   string
+}
+
+type CORSConfig struct {
+	AllowedOrigins []string // List of allowed origins or patterns like "*.sprout.com"
 }
 
 type RateLimitConfig struct {
@@ -96,6 +102,9 @@ func Load() *Config {
 			Issuer:          getEnv("JWT_ISSUER", "auth-service"),
 			SigningMethod:   getEnv("JWT_SIGNING_METHOD", "HS256"),
 		},
+		CORS: CORSConfig{
+			AllowedOrigins: getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000", "*.localhost:3000"}),
+		},
 		RateLimit: RateLimitConfig{
 			LoginAttempts: getEnvAsInt("RATE_LIMIT_LOGIN_ATTEMPTS", 5), // 5 per 15 min per IP
 			PasswordReset: getEnvAsInt("RATE_LIMIT_PASSWORD_RESET", 3), // 3 per hour per email
@@ -133,6 +142,22 @@ func getEnvAsInt(key string, defaultValue int) int {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
 		}
+	}
+	return defaultValue
+}
+
+func getEnvAsSlice(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		// Simple comma-separated parsing
+		if value == "" {
+			return defaultValue
+		}
+		// Split by comma and trim spaces
+		parts := strings.Split(value, ",")
+		for i, part := range parts {
+			parts[i] = strings.TrimSpace(part)
+		}
+		return parts
 	}
 	return defaultValue
 }

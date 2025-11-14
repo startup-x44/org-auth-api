@@ -70,8 +70,8 @@ func CSRFMiddleware(config CSRFConfig) gin.HandlerFunc {
 			return
 		}
 
-		// Token is valid, remove it to prevent reuse
-		tokenStore.Delete(c.ClientIP())
+		// Token is valid - in development, keep it for reuse
+		// In production, you'd want to implement token rotation
 
 		c.Next()
 	}

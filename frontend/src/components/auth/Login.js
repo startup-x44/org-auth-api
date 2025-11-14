@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { resolveTenant } from '../../utils/tenant';
 
 const Login = () => {
   const [formData, setFormData] = useState({
@@ -10,9 +11,19 @@ const Login = () => {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resolvedTenant, setResolvedTenant] = useState('');
 
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  // Auto-resolve tenant on component mount and email change
+  useEffect(() => {
+    const tenant = resolveTenant(formData.email);
+    if (tenant) {
+      setResolvedTenant(tenant);
+      setFormData(prev => ({ ...prev, tenant_id: tenant }));
+    }
+  }, [formData.email]);
 
   const handleChange = (e) => {
     setFormData({
@@ -25,6 +36,13 @@ const Login = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
+
+    // Validate tenant is resolved
+    if (!formData.tenant_id) {
+      setError('Unable to determine tenant. Please contact support.');
+      setLoading(false);
+      return;
+    }
 
     const result = await login(formData.email, formData.password, formData.tenant_id);
 
@@ -62,39 +80,33 @@ const Login = () => {
             </div>
           )}
 
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="tenant_id" className="sr-only">
-                Tenant ID
-              </label>
-              <input
-                id="tenant_id"
-                name="tenant_id"
-                type="text"
-                required
-                className="input rounded-t-md"
-                placeholder="Tenant ID"
-                value={formData.tenant_id}
-                onChange={handleChange}
-              />
+          {resolvedTenant && (
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+              <div className="text-sm text-blue-800">
+                <strong>Organization:</strong> {resolvedTenant}
+              </div>
             </div>
+          )}
+
+          <div className="space-y-4">
             <div>
-              <label htmlFor="email" className="sr-only">
-                Email address
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                Email Address
               </label>
               <input
                 id="email"
                 name="email"
                 type="email"
                 required
-                className="input"
-                placeholder="Email address"
+                className="input mt-1"
+                placeholder="Enter your email"
                 value={formData.email}
                 onChange={handleChange}
               />
             </div>
+
             <div>
-              <label htmlFor="password" className="sr-only">
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                 Password
               </label>
               <input
@@ -102,8 +114,8 @@ const Login = () => {
                 name="password"
                 type="password"
                 required
-                className="input rounded-b-md"
-                placeholder="Password"
+                className="input mt-1"
+                placeholder="Enter your password"
                 value={formData.password}
                 onChange={handleChange}
               />

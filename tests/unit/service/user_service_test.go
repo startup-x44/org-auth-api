@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"auth-service/internal/config"
+	"auth-service/internal/models"
 	"auth-service/internal/repository"
 	"auth-service/internal/service"
 	"auth-service/pkg/jwt"
@@ -37,8 +38,8 @@ func TestUserService_Login(t *testing.T) {
 	// Create JWT config and service
 	jwtConfig := &config.JWTConfig{
 		Secret:          "test-secret",
-		AccessTokenTTL:  60,   // 1 hour
-		RefreshTokenTTL: 30,   // 30 days
+		AccessTokenTTL:  60, // 1 hour
+		RefreshTokenTTL: 30, // 30 days
 		Issuer:          "test-issuer",
 		SigningMethod:   "RS256",
 	}
@@ -137,17 +138,14 @@ func TestUserService_Register(t *testing.T) {
 	testDB := testutils.SetupTestDB(t)
 	defer testDB.TeardownTestDB(t)
 
-	// Create test tenant
-	tenant := testutils.CreateTestTenant(t, testDB.DB, "Test Organization", "test.local")
-
 	// Create repositories
 	repo := repository.NewRepository(testDB.DB)
 
 	// Create JWT config and service
 	jwtConfig := &config.JWTConfig{
 		Secret:          "test-secret",
-		AccessTokenTTL:  60,   // 1 hour
-		RefreshTokenTTL: 30,   // 30 days
+		AccessTokenTTL:  60, // 1 hour
+		RefreshTokenTTL: 30, // 30 days
 		Issuer:          "test-issuer",
 		SigningMethod:   "RS256",
 	}
@@ -169,7 +167,7 @@ func TestUserService_Register(t *testing.T) {
 				Password:        "NewPass123!",
 				ConfirmPassword: "NewPass123!",
 				UserType:        "Student",
-				TenantID:        tenant.ID.String(),
+				TenantID:        "test.local", // Use domain instead of UUID for now
 				FirstName:       "John",
 				LastName:        "Doe",
 			},
@@ -182,7 +180,7 @@ func TestUserService_Register(t *testing.T) {
 				Password:        "NewPass123!",
 				ConfirmPassword: "DifferentPass123!",
 				UserType:        "Student",
-				TenantID:        tenant.ID.String(),
+				TenantID:        "test.local",
 			},
 			wantErr:     true,
 			errContains: "passwords do not match",
@@ -194,7 +192,7 @@ func TestUserService_Register(t *testing.T) {
 				Password:        "123",
 				ConfirmPassword: "123",
 				UserType:        "Student",
-				TenantID:        tenant.ID.String(),
+				TenantID:        "test.local",
 			},
 			wantErr:     true,
 			errContains: "password",
@@ -206,7 +204,7 @@ func TestUserService_Register(t *testing.T) {
 				Password:        "AnotherPass123!",
 				ConfirmPassword: "AnotherPass123!",
 				UserType:        "Student",
-				TenantID:        tenant.ID.String(),
+				TenantID:        "test.local",
 			},
 			wantErr:     true,
 			errContains: "already exists",
@@ -218,8 +216,13 @@ func TestUserService_Register(t *testing.T) {
 			// Clean test data before each test
 			testutils.CleanTestData(t, testDB.DB)
 
-			// Recreate test tenant
-			tenant = testutils.CreateTestTenant(t, testDB.DB, "Test Organization", "test.local")
+			// Create test tenant using repository
+			tenant := &models.Tenant{
+				Name:   "Test Organization",
+				Domain: "test.local",
+			}
+			err := repo.Tenant().Create(context.Background(), tenant)
+			require.NoError(t, err)
 
 			resp, err := userSvc.Register(context.Background(), tt.req)
 
@@ -256,8 +259,8 @@ func TestUserService_GetProfile(t *testing.T) {
 
 	jwtConfig := &config.JWTConfig{
 		Secret:          "test-secret",
-		AccessTokenTTL:  60,   // 1 hour
-		RefreshTokenTTL: 30,   // 30 days
+		AccessTokenTTL:  60, // 1 hour
+		RefreshTokenTTL: 30, // 30 days
 		Issuer:          "test-issuer",
 		SigningMethod:   "RS256",
 	}
@@ -296,8 +299,8 @@ func TestUserService_resolveTenantID(t *testing.T) {
 
 	jwtConfig := &config.JWTConfig{
 		Secret:          "test-secret",
-		AccessTokenTTL:  60,   // 1 hour
-		RefreshTokenTTL: 30,   // 30 days
+		AccessTokenTTL:  60, // 1 hour
+		RefreshTokenTTL: 30, // 30 days
 		Issuer:          "test-issuer",
 		SigningMethod:   "RS256",
 	}
@@ -352,6 +355,191 @@ func TestUserService_resolveTenantID(t *testing.T) {
 			} else {
 				assert.Error(t, err)
 				assert.Nil(t, resp)
+			}
+		})
+	}
+}
+
+func TestUserService_TenantAwareRegistration(t *testing.T) {
+	testDB := testutils.SetupTestDB(t)
+	defer testDB.TeardownTestDB(t)
+
+	// Create repositories
+	repo := repository.NewRepository(testDB.DB)
+
+	// Create JWT config and service
+	jwtConfig := &config.JWTConfig{
+		Secret:          "test-secret",
+		AccessTokenTTL:  60, // 1 hour
+		RefreshTokenTTL: 30, // 30 days
+		Issuer:          "test-issuer",
+		SigningMethod:   "RS256",
+	}
+	jwtSvc, _ := jwt.NewService(jwtConfig)
+
+	passwordService := password.NewService()
+	userSvc := service.NewUserService(repo, jwtSvc, passwordService)
+
+	tests := []struct {
+		name             string
+		req              *service.RegisterRequest
+		wantErr          bool
+		errContains      string
+		expectedTenantID string
+		setupTenants     func(t *testing.T, repo repository.TenantRepository) (tenant1, tenant2 *models.Tenant)
+	}{
+		{
+			name: "successful registration with explicit tenant ID",
+			req: &service.RegisterRequest{
+				Email:           "user@company-a.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				TenantID:        "", // Will be set in test
+				FirstName:       "John",
+				LastName:        "Doe",
+			},
+			wantErr: false,
+			setupTenants: func(t *testing.T, tenantRepo repository.TenantRepository) (tenant1, tenant2 *models.Tenant) {
+				tenant1 = &models.Tenant{Name: "Company A", Domain: "company-a.com"}
+				err := tenantRepo.Create(context.Background(), tenant1)
+				require.NoError(t, err)
+				return tenant1, nil
+			},
+		},
+		{
+			name: "successful registration with tenant domain",
+			req: &service.RegisterRequest{
+				Email:           "user@company-b.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				TenantID:        "company-b.com",
+				FirstName:       "Jane",
+				LastName:        "Smith",
+			},
+			wantErr: false,
+			setupTenants: func(t *testing.T, tenantRepo repository.TenantRepository) (tenant1, tenant2 *models.Tenant) {
+				tenant2 = &models.Tenant{Name: "Company B", Domain: "company-b.com"}
+				err := tenantRepo.Create(context.Background(), tenant2)
+				require.NoError(t, err)
+				return nil, tenant2
+			},
+		},
+		{
+			name: "successful registration with email domain auto-assignment",
+			req: &service.RegisterRequest{
+				Email:           "user@company-a.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				FirstName:       "Bob",
+				LastName:        "Johnson",
+			},
+			wantErr: false,
+			setupTenants: func(t *testing.T, tenantRepo repository.TenantRepository) (tenant1, tenant2 *models.Tenant) {
+				tenant1 = &models.Tenant{Name: "Company A", Domain: "company-a.com"}
+				err := tenantRepo.Create(context.Background(), tenant1)
+				require.NoError(t, err)
+				return tenant1, nil
+			},
+		},
+		{
+			name: "successful registration with tenant subdomain",
+			req: &service.RegisterRequest{
+				Email:           "user@fligno.sprout.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				TenantSubdomain: "fligno",
+				FirstName:       "Alice",
+				LastName:        "Brown",
+			},
+			wantErr: false,
+		},
+		{
+			name: "registration rejected with invalid tenant ID",
+			req: &service.RegisterRequest{
+				Email:           "user@unknown.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				TenantID:        uuid.New().String(), // Random UUID
+				FirstName:       "Invalid",
+				LastName:        "User",
+			},
+			wantErr:     true,
+			errContains: "invalid tenant",
+		},
+		{
+			name: "registration rejected with invalid tenant domain",
+			req: &service.RegisterRequest{
+				Email:           "user@unknown.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				TenantID:        "nonexistent.com",
+				FirstName:       "Invalid",
+				LastName:        "User",
+			},
+			wantErr:     true,
+			errContains: "invalid tenant",
+		},
+		{
+			name: "registration rejected with unknown email domain",
+			req: &service.RegisterRequest{
+				Email:           "user@unknown-domain.com",
+				Password:        "TestPass123!",
+				ConfirmPassword: "TestPass123!",
+				UserType:        "Student",
+				FirstName:       "Unknown",
+				LastName:        "Domain",
+			},
+			wantErr:     true,
+			errContains: "no valid tenant found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean test data before each test
+			testutils.CleanTestData(t, testDB.DB)
+
+			// Setup tenants if needed
+			var tenant1, tenant2 *models.Tenant
+			if tt.setupTenants != nil {
+				tenant1, tenant2 = tt.setupTenants(t, repo.Tenant())
+			}
+
+			// Set tenant ID for tests that need it
+			if tt.req.TenantID == "" && tenant1 != nil {
+				tt.req.TenantID = tenant1.ID.String()
+			}
+
+			resp, err := userSvc.Register(context.Background(), tt.req)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				assert.Nil(t, resp)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, resp)
+				assert.NotNil(t, resp.Token)
+				assert.NotEmpty(t, resp.Token.AccessToken)
+				assert.Equal(t, tt.req.Email, resp.User.Email)
+				assert.Equal(t, tt.req.UserType, resp.User.UserType)
+				if tt.expectedTenantID != "" {
+					assert.Equal(t, tt.expectedTenantID, resp.User.TenantID)
+				}
+				if tenant1 != nil && tt.req.TenantID == tenant1.ID.String() {
+					assert.Equal(t, tenant1.ID.String(), resp.User.TenantID)
+				}
+				if tenant2 != nil && tt.req.TenantID == "company-b.com" {
+					assert.Equal(t, tenant2.ID.String(), resp.User.TenantID)
+				}
 			}
 		})
 	}

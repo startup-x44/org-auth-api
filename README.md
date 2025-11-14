@@ -87,6 +87,39 @@ A production-ready authentication microservice built with Go, providing multi-te
    go run cmd/server/main.go
    ```
 
+#### Multi-Tenant Development Setup
+
+For testing multi-tenant functionality locally:
+
+1. **Frontend Development:**
+   ```bash
+   cd frontend
+   npm install
+   npm start
+   ```
+   The frontend will run on `http://localhost:3000`
+
+2. **Tenant Subdomain Testing:**
+   To test tenant subdomains in development, you can:
+   
+   - Use browser developer tools to modify the `document.location.hostname`
+   - Set up local DNS aliases (e.g., add to `/etc/hosts`):
+     ```
+     127.0.0.1 tenant1.localhost
+     127.0.0.1 tenant2.localhost
+     ```
+   - Use a proxy tool to route subdomain requests to localhost:3000
+
+3. **CORS Configuration:**
+   The backend is configured to allow:
+   - `http://localhost:3000`
+   - `*.localhost:3000` (for tenant subdomains)
+
+4. **Testing Different Tenants:**
+   - Register/Login with emails from different domains
+   - The system auto-resolves tenant from email domain or subdomain
+   - Each tenant's data is completely isolated
+
 ### Development with Live Reload
 
 For development with automatic code reloading:

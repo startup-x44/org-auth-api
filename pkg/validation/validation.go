@@ -82,13 +82,37 @@ func ValidateUserType(userType string) error {
 		models.UserTypePartner,
 	}
 
+	userTypeLower := strings.ToLower(userType)
 	for _, validType := range validTypes {
-		if userType == validType {
+		if userTypeLower == strings.ToLower(validType) {
 			return nil
 		}
 	}
 
 	return ErrInvalidUserType
+}
+
+// NormalizeUserType normalizes user type to proper case
+func NormalizeUserType(userType string) string {
+	validTypes := []string{
+		models.UserTypeAdmin,
+		models.UserTypeStudent,
+		models.UserTypeRTO,
+		models.UserTypeIssuer,
+		models.UserTypeValidator,
+		models.UserTypeBadger,
+		models.UserTypeNonPartner,
+		models.UserTypePartner,
+	}
+
+	userTypeLower := strings.ToLower(userType)
+	for _, validType := range validTypes {
+		if userTypeLower == strings.ToLower(validType) {
+			return validType
+		}
+	}
+
+	return userType // Return as-is if not found (shouldn't happen after validation)
 }
 
 // ValidatePasswordsMatch checks if passwords match
