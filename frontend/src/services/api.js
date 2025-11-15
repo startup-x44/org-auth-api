@@ -33,15 +33,18 @@ const getCSRFToken = async () => {
 api.interceptors.request.use(
   async (config) => {
     // Add auth token
-    const accessToken = localStorage.getItem('access_token');
+    const orgId = localStorage.getItem('organization_id');
+    const accessToken = orgId 
+      ? localStorage.getItem(`access_token_${orgId}`)
+      : localStorage.getItem('access_token');
+    
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
 
-    // Add tenant ID header
-    const tenantId = localStorage.getItem('tenant_id');
-    if (tenantId) {
-      config.headers['X-Tenant-ID'] = tenantId;
+    // Add organization ID header
+    if (orgId) {
+      config.headers['X-Organization-ID'] = orgId;
     }
 
     // Add CSRF token for POST, PUT, DELETE, PATCH requests
@@ -71,7 +74,11 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
+        const orgId = localStorage.getItem('organization_id');
+        const refreshToken = orgId
+          ? localStorage.getItem(`refresh_token_${orgId}`)
+          : localStorage.getItem('refresh_token');
+        
         if (refreshToken) {
           const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
           const response = await axios.post(
@@ -81,18 +88,32 @@ api.interceptors.response.use(
 
           const { access_token, refresh_token } = response.data.data.token;
 
-          // Store tokens
-          localStorage.setItem('access_token', access_token);
-          localStorage.setItem('refresh_token', refresh_token);
+          // Store tokens with org prefix if applicable
+          if (orgId) {
+            localStorage.setItem(`access_token_${orgId}`, access_token);
+            localStorage.setItem(`refresh_token_${orgId}`, refresh_token);
+          } else {
+            localStorage.setItem('access_token', access_token);
+            localStorage.setItem('refresh_token', refresh_token);
+          }
 
           originalRequest.headers.Authorization = `Bearer ${access_token}`;
           return api(originalRequest);
         }
       } catch (refreshError) {
         // Refresh failed, redirect to login
+        const orgId = localStorage.getItem('organization_id');
+        if (orgId) {
+          localStorage.removeItem(`access_token_${orgId}`);
+          localStorage.removeItem(`refresh_token_${orgId}`);
+          localStorage.removeItem(`user_${orgId}`);
+          localStorage.removeItem(`organization_${orgId}`);
+        }
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
         localStorage.removeItem('user');
+        localStorage.removeItem('organization_id');
+        localStorage.removeItem('user_global');
         window.location.href = '/login';
       }
     }
@@ -105,6 +126,9 @@ api.interceptors.response.use(
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
+  selectOrganization: (data) => api.post('/auth/select-organization', data),
+  createOrganization: (data) => api.post('/auth/create-organization', data),
+  getMyOrganizations: () => api.get('/user/organizations'),
   refreshToken: (data) => api.post('/auth/refresh', data),
   logout: () => api.post('/user/logout'),
   forgotPassword: (data) => api.post('/auth/forgot-password', data),

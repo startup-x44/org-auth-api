@@ -48,6 +48,8 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 		// Set user context
 		ctx := context.WithValue(c.Request.Context(), "user_id", claims.UserID)
 		ctx = context.WithValue(ctx, "user_email", claims.Email)
+		ctx = context.WithValue(ctx, "organization_id", claims.OrganizationID)
+		ctx = context.WithValue(ctx, "organization_role", claims.OrganizationRole)
 		ctx = context.WithValue(ctx, "is_superadmin", claims.IsSuperadmin)
 		c.Request = c.Request.WithContext(ctx)
 
@@ -71,28 +73,197 @@ func (m *AuthMiddleware) AdminRequired() gin.HandlerFunc {
 	}
 }
 
-// TenantRequired middleware ensures tenant context is set
-func (m *AuthMiddleware) TenantRequired() gin.HandlerFunc {
+// RequirePermission middleware requires a specific permission
+// Superadmins bypass all permission checks
+func (m *AuthMiddleware) RequirePermission(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tenantID := c.GetHeader("X-Tenant-ID")
-		if tenantID == "" {
-			// Try to get from JWT claims
-			if claimsTenantID, exists := c.Request.Context().Value("tenant_id").(string); exists {
-				tenantID = claimsTenantID
-			}
+		// Superadmin bypass
+		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
+			c.Next()
+			return
 		}
 
-		if tenantID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
+		// Extract permissions from token claims
+		token := m.extractToken(c)
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
-				"message": "Tenant ID required",
+				"message": "Authorization token required",
 			})
 			c.Abort()
 			return
 		}
 
-		// Set tenant context
-		ctx := context.WithValue(c.Request.Context(), "tenant_id", tenantID)
+		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Invalid or expired token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Check if user has the required permission
+		hasPermission := false
+		for _, p := range claims.Permissions {
+			if p == permission {
+				hasPermission = true
+				break
+			}
+		}
+
+		if !hasPermission {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":  false,
+				"message":  "Insufficient permissions",
+				"required": permission,
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// RequireAnyPermission middleware requires at least one of the specified permissions
+func (m *AuthMiddleware) RequireAnyPermission(permissions ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Superadmin bypass
+		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
+			c.Next()
+			return
+		}
+
+		// Extract permissions from token claims
+		token := m.extractToken(c)
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Authorization token required",
+			})
+			c.Abort()
+			return
+		}
+
+		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Invalid or expired token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Check if user has any of the required permissions
+		hasPermission := false
+		for _, requiredPerm := range permissions {
+			for _, userPerm := range claims.Permissions {
+				if userPerm == requiredPerm {
+					hasPermission = true
+					break
+				}
+			}
+			if hasPermission {
+				break
+			}
+		}
+
+		if !hasPermission {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":  false,
+				"message":  "Insufficient permissions",
+				"required": permissions,
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// RequireAllPermissions middleware requires all of the specified permissions
+func (m *AuthMiddleware) RequireAllPermissions(permissions ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Superadmin bypass
+		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
+			c.Next()
+			return
+		}
+
+		// Extract permissions from token claims
+		token := m.extractToken(c)
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Authorization token required",
+			})
+			c.Abort()
+			return
+		}
+
+		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "Invalid or expired token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Check if user has all required permissions
+		userPermMap := make(map[string]bool)
+		for _, p := range claims.Permissions {
+			userPermMap[p] = true
+		}
+
+		missingPerms := []string{}
+		for _, requiredPerm := range permissions {
+			if !userPermMap[requiredPerm] {
+				missingPerms = append(missingPerms, requiredPerm)
+			}
+		}
+
+		if len(missingPerms) > 0 {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "Insufficient permissions",
+				"missing": missingPerms,
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// OrganizationRequired middleware ensures organization context is set
+func (m *AuthMiddleware) OrganizationRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		organizationID := c.GetHeader("X-Organization-ID")
+		if organizationID == "" {
+			// Try to get from JWT claims
+			if claimsOrgID, exists := c.Request.Context().Value("organization_id").(string); exists {
+				organizationID = claimsOrgID
+			}
+		}
+
+		if organizationID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Organization ID required",
+			})
+			c.Abort()
+			return
+		}
+
+		// Set organization context
+		ctx := context.WithValue(c.Request.Context(), "organization_id", organizationID)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
@@ -140,7 +311,7 @@ func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 		// Set CORS headers
 		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Tenant-ID")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Tenant-ID, X-Organization-ID")
 		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 		c.Header("Access-Control-Expose-Headers", "X-CSRF-Token, Authorization")
 

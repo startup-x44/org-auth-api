@@ -146,8 +146,14 @@ func (m *OrganizationMiddleware) MembershipRequired(requiredRole string) gin.Han
 			return
 		}
 
+		// Get role name from preloaded relation
+		var roleName string
+		if membership.Role != nil {
+			roleName = membership.Role.Name
+		}
+
 		// Check role permissions if required
-		if requiredRole != "" && !m.hasRequiredRole(membership.Role, requiredRole) {
+		if requiredRole != "" && !m.hasRequiredRole(roleName, requiredRole) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "Insufficient permissions",
@@ -158,7 +164,7 @@ func (m *OrganizationMiddleware) MembershipRequired(requiredRole string) gin.Han
 
 		// Set membership context
 		ctx := context.WithValue(c.Request.Context(), "membership", membership)
-		ctx = context.WithValue(ctx, "user_role", membership.Role)
+		ctx = context.WithValue(ctx, "user_role", roleName)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()

@@ -80,32 +80,37 @@ const Profile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/20">
+      {/* Floating orbs background */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 -left-4 w-72 h-72 bg-purple-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob" />
+        <div className="absolute top-0 -right-4 w-72 h-72 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000" />
+        <div className="absolute -bottom-8 left-20 w-72 h-72 bg-pink-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000" />
+      </div>
+
       {/* Header */}
-      <header className="bg-white dark:bg-slate-800 shadow-sm border-b">
+      <header className="relative bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleBack}
-                className="flex items-center space-x-2"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                <span>Back to Dashboard</span>
-              </Button>
-            </div>
-            <h1 className="text-xl font-semibold text-foreground">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBack}
+              className="flex items-center gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back</span>
+            </Button>
+            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               Profile Settings
             </h1>
-            <div className="w-24"></div> {/* Spacer for centering */}
+            <div className="w-20"></div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -113,10 +118,12 @@ const Profile = () => {
           className="space-y-8"
         >
           {/* Profile Overview */}
-          <Card>
+          <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
             <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <User className="h-5 w-5 text-primary" />
+              <CardTitle className="flex items-center gap-2 text-gray-900">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <User className="h-5 w-5 text-blue-600" />
+                </div>
                 <span>Profile Information</span>
               </CardTitle>
               <CardDescription>
@@ -124,18 +131,18 @@ const Profile = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center space-x-6 mb-6">
-                <Avatar className="h-20 w-20">
-                  <AvatarFallback className="text-2xl">
+              <div className="flex items-center gap-6 mb-6 p-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl">
+                <Avatar className="h-20 w-20 ring-4 ring-purple-100">
+                  <AvatarFallback className="text-2xl bg-gradient-to-br from-blue-500 to-purple-500 text-white">
                     {getInitials(user.first_name, user.last_name)}
                   </AvatarFallback>
                 </Avatar>
                 <div>
-                  <h3 className="text-lg font-semibold text-foreground">
+                  <h3 className="text-lg font-semibold text-gray-900">
                     {user.first_name} {user.last_name}
                   </h3>
-                  <p className="text-gray-600 dark:text-gray-400">{user.email}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-500 mt-1">
+                  <p className="text-gray-600">{user.email}</p>
+                  <p className="text-sm text-gray-500 mt-1">
                     Member since {new Date(user.created_at).toLocaleDateString()}
                   </p>
                 </div>

@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,116 +20,177 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
-// UserService defines the interface for user business logic
+// ───────────────────────────────────────────────────────────────────────────────
+// PUBLIC INTERFACE
+// ───────────────────────────────────────────────────────────────────────────────
+
+// UserService defines the interface for user business logic (Slack-style multi-org)
 type UserService interface {
-	Register(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error)
-	Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error)
+	// GLOBAL AUTH (Slack-style multi-organization)
+	RegisterGlobal(ctx context.Context, req *RegisterGlobalRequest) (*RegisterGlobalResponse, error)
+	LoginGlobal(ctx context.Context, req *LoginGlobalRequest) (*LoginGlobalResponse, error)
+	SelectOrganization(ctx context.Context, req *SelectOrganizationRequest) (*SelectOrganizationResponse, error)
+	CreateOrganization(ctx context.Context, userID string, req *CreateOrganizationRequest) (*CreateOrganizationResponse, error)
+	GetMyOrganizations(ctx context.Context, userID string) ([]*OrganizationMembership, error)
+
+	// ORG-SCOPED AUTH
 	RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*RefreshTokenResponse, error)
 	Logout(ctx context.Context, req *LogoutRequest) error
+
+	// USER PROFILE
 	GetProfile(ctx context.Context, userID string) (*UserProfile, error)
 	UpdateProfile(ctx context.Context, userID string, req *UpdateProfileRequest) (*UserProfile, error)
 	ChangePassword(ctx context.Context, userID string, req *ChangePasswordRequest) error
 	ForgotPassword(ctx context.Context, req *ForgotPasswordRequest) error
 	ResetPassword(ctx context.Context, req *ResetPasswordRequest) error
+
+	// ADMIN
 	ListUsers(ctx context.Context, limit int, cursor string) (*UserListResponse, error)
 	ActivateUser(ctx context.Context, userID string) error
 	DeactivateUser(ctx context.Context, userID string) error
 	DeleteUser(ctx context.Context, userID string) error
+
+	// SESSION MANAGEMENT
+	GetUserSessions(ctx context.Context, userID string) ([]*models.UserSession, error)
+	RevokeUserSession(ctx context.Context, userID, sessionID, reason string) error
+
+	// DEPENDENCY INJECTION
 	SetRedisClient(client *redis.Client)
 	SetEmailService(emailSvc email.Service)
 	SetSessionService(sessionSvc SessionService)
-	GetUserSessions(ctx context.Context, userID string) ([]*models.UserSession, error)
-	RevokeUserSession(ctx context.Context, userID, sessionID, reason string) error
 }
 
-// RegisterRequest represents user registration request
-type RegisterRequest struct {
+// ───────────────────────────────────────────────────────────────────────────────
+// REQUEST / RESPONSE DTOs
+// ───────────────────────────────────────────────────────────────────────────────
+
+// --- GLOBAL REGISTRATION (no organization yet) ---
+
+type RegisterGlobalRequest struct {
 	Email           string `json:"email"`
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
 	FirstName       string `json:"first_name,omitempty"`
 	LastName        string `json:"last_name,omitempty"`
 	Phone           string `json:"phone,omitempty"`
+	Address         string `json:"address,omitempty"`
+	InvitationToken string `json:"invitation_token,omitempty"` // Optional: auto-accept invitation after registration
+	ClientIP        string `json:"-"`
+	UserAgent       string `json:"-"`
 }
 
-// RegisterResponse represents user registration response
-type RegisterResponse struct {
-	User  *UserProfile `json:"user"`
-	Token *TokenPair   `json:"token"`
+type RegisterGlobalResponse struct {
+	User *UserProfile `json:"user"`
 }
 
-// LoginRequest represents user login request
-type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+// --- GLOBAL LOGIN (returns list of organizations) ---
+
+type LoginGlobalRequest struct {
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	ClientIP  string `json:"-"`
+	UserAgent string `json:"-"`
 }
 
-// LoginResponse represents user login response
-type LoginResponse struct {
-	User  *UserProfile `json:"user"`
-	Token *TokenPair   `json:"token"`
+type LoginGlobalResponse struct {
+	User          *UserProfile              `json:"user"`
+	Organizations []*OrganizationMembership `json:"organizations"`
 }
 
-// RefreshTokenRequest represents token refresh request
+// --- SELECT ORGANIZATION (get org-scoped token) ---
+
+type SelectOrganizationRequest struct {
+	UserID         string `json:"user_id"`         // Global auth context (from FE/global cookie)
+	OrganizationID string `json:"organization_id"` // Chosen org
+	ClientIP       string `json:"-"`
+	UserAgent      string `json:"-"`
+}
+
+type SelectOrganizationResponse struct {
+	User         *UserProfile            `json:"user"`
+	Organization *OrganizationMembership `json:"organization"`
+	Token        *TokenPair              `json:"token"`
+}
+
+// --- CREATE ORGANIZATION (Slack-style workspace) ---
+// Note: CreateOrganizationRequest/Response defined in organization_service.go
+
+type CreateOrganizationResponse struct {
+	Organization *OrganizationMembership `json:"organization"`
+	Token        *TokenPair              `json:"token"` // org-scoped token for creator
+}
+
+// --- ORGANIZATION MEMBERSHIP DTO (lightweight) ---
+
+type OrganizationMembership struct {
+	OrganizationID   string     `json:"organization_id"`
+	OrganizationName string     `json:"organization_name"`
+	OrganizationSlug string     `json:"organization_slug"`
+	Role             string     `json:"role"`
+	Status           string     `json:"status"`
+	JoinedAt         *time.Time `json:"joined_at,omitempty"`
+}
+
+// --- ORG-SCOPED AUTH ---
+
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// RefreshTokenResponse represents token refresh response
 type RefreshTokenResponse struct {
 	Token *TokenPair `json:"token"`
 }
 
-// LogoutRequest represents logout request
 type LogoutRequest struct {
 	UserID       string `json:"user_id"`
+	SessionID    string `json:"session_id,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
-// UserProfile represents user profile information
+// --- PROFILE / PASSWORD ---
+
 type UserProfile struct {
-	ID        string     `json:"id"`
-	Email     string     `json:"email"`
-	UserType  string     `json:"user_type"`
-	TenantID  string     `json:"tenant_id"`
-	FirstName string     `json:"first_name,omitempty"`
-	LastName  string     `json:"last_name,omitempty"`
-	Phone     string     `json:"phone,omitempty"`
-	IsActive  bool       `json:"is_active"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	LastLogin *time.Time `json:"last_login,omitempty"`
+	ID           string     `json:"id"`
+	Email        string     `json:"email"`
+	FirstName    string     `json:"first_name,omitempty"`
+	LastName     string     `json:"last_name,omitempty"`
+	Phone        string     `json:"phone,omitempty"`
+	Address      string     `json:"address,omitempty"`
+	GlobalRole   string     `json:"global_role"`
+	IsSuperadmin bool       `json:"is_superadmin"`
+	IsActive     bool       `json:"is_active"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	LastLogin    *time.Time `json:"last_login,omitempty"`
 }
 
-// UpdateProfileRequest represents profile update request
 type UpdateProfileRequest struct {
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
-	Phone     string `json:"phone,omitempty"`
+	FirstName *string `json:"first_name,omitempty"` // nil = no change, "" = clear, "value" = update
+	LastName  *string `json:"last_name,omitempty"`
+	Phone     *string `json:"phone,omitempty"`
+	Address   *string `json:"address,omitempty"`
 }
 
-// ChangePasswordRequest represents password change request
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 	ConfirmPassword string `json:"confirm_password"`
 }
 
-// ForgotPasswordRequest represents forgot password request
 type ForgotPasswordRequest struct {
 	Email string `json:"email"`
 }
 
-// ResetPasswordRequest represents password reset request
 type ResetPasswordRequest struct {
 	Token           string `json:"token"`
 	NewPassword     string `json:"new_password"`
 	ConfirmPassword string `json:"confirm_password"`
 }
 
-// UserListResponse represents paginated user list response
+// List users (for superadmin)
 type UserListResponse struct {
 	Users      []*UserProfile `json:"users"`
 	Total      int64          `json:"total"`
@@ -134,15 +198,39 @@ type UserListResponse struct {
 	NextCursor string         `json:"next_cursor,omitempty"`
 }
 
-// TokenPair represents access and refresh token pair
+// TokenPair represents access and refresh token pair (ORG-SCOPED)
 type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int64  `json:"expires_in"`
-	TokenType    string `json:"token_type"`
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	ExpiresIn      int64  `json:"expires_in"`
+	TokenType      string `json:"token_type"`
+	SessionID      string `json:"session_id"`
+	OrganizationID string `json:"organization_id"`
 }
 
-// userService implements UserService interface
+// ───────────────────────────────────────────────────────────────────────────────
+// ERRORS & CONSTANTS
+// ───────────────────────────────────────────────────────────────────────────────
+
+var (
+	ErrUserAlreadyExists   = errors.New("user with this email already exists")
+	ErrInvalidCredentials  = errors.New("invalid email or password")
+	ErrOrgNotFound         = errors.New("organization not found or inactive")
+	ErrMembershipNotFound  = errors.New("user is not a member of this organization")
+	ErrMembershipSuspended = errors.New("membership is not active")
+)
+
+// Account lockout constants (global / email + IP)
+const (
+	MaxFailedAttempts   = 5
+	LockoutDuration     = 15 * time.Minute
+	FailedAttemptWindow = 15 * time.Minute
+)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// SERVICE IMPLEMENTATION
+// ───────────────────────────────────────────────────────────────────────────────
+
 type userService struct {
 	repo            repository.Repository
 	jwtService      *jwt.Service
@@ -161,411 +249,633 @@ func NewUserService(repo repository.Repository, jwtService *jwt.Service, passwor
 		passwordService: passwordService,
 		redisClient:     nil,
 		emailSvc:        nil,
-		sessionSvc:      nil, // Will be set later
+		sessionSvc:      nil,
 		auditLogger:     logger.NewAuditLogger(),
 	}
 }
 
-// SetRedisClient sets the Redis client for account lockout functionality
-func (s *userService) SetRedisClient(client *redis.Client) {
-	s.redisClient = client
-}
-
-// SetEmailService sets the email service for password reset functionality
-func (s *userService) SetEmailService(emailSvc email.Service) {
-	s.emailSvc = emailSvc
-}
-
-// SetSessionService sets the session service for advanced session management
+// DI setters
+func (s *userService) SetRedisClient(client *redis.Client)    { s.redisClient = client }
+func (s *userService) SetEmailService(emailSvc email.Service) { s.emailSvc = emailSvc }
 func (s *userService) SetSessionService(sessionSvc SessionService) {
 	s.sessionSvc = sessionSvc
 }
 
-// Register registers a new user
-func (s *userService) Register(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
-	// Validate registration request
-	if err := s.validateRegistrationRequest(req); err != nil {
+// ───────────────────────────────────────────────────────────────────────────────
+// GLOBAL REGISTRATION & LOGIN (NO ORG YET)
+// ───────────────────────────────────────────────────────────────────────────────
+
+// RegisterGlobal creates a GLOBAL user account (no organization yet)
+func (s *userService) RegisterGlobal(ctx context.Context, req *RegisterGlobalRequest) (*RegisterGlobalResponse, error) {
+	// Core validation
+	if err := validation.ValidateUserRegistration(req.Email, req.Password, req.ConfirmPassword); err != nil {
 		return nil, err
 	}
 
-	// Create user account
-	user, err := s.createUserAccount(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	// Generate authentication tokens
-	tokenPair, err := s.generateTokenPair(user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create user session and refresh token
-	if err := s.createUserSessionAndTokens(ctx, user, tokenPair); err != nil {
-		// Log error but don't fail registration
-		fmt.Printf("Failed to create session/tokens: %v\n", err)
-	}
-
-	return &RegisterResponse{
-		User:  s.convertToUserProfile(user),
-		Token: tokenPair,
-	}, nil
-}
-
-// validateRegistrationRequest validates the registration request data
-func (s *userService) validateRegistrationRequest(req *RegisterRequest) error {
-	// Validate core registration fields
-	if err := validation.ValidateEmail(req.Email); err != nil {
-		return err
-	}
-	if err := validation.ValidatePassword(req.Password); err != nil {
-		return err
-	}
-	if err := validation.ValidatePasswordsMatch(req.Password, req.ConfirmPassword); err != nil {
-		return err
-	}
-
-	// Validate optional profile fields
-	if err := s.validateOptionalProfileFields(req); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// validateOptionalProfileFields validates optional user profile fields
-func (s *userService) validateOptionalProfileFields(req *RegisterRequest) error {
+	// Optional profile validation
 	if req.FirstName != "" {
 		if err := validation.ValidateName(req.FirstName, "first name"); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if req.LastName != "" {
 		if err := validation.ValidateName(req.LastName, "last name"); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if req.Phone != "" {
 		if err := validation.ValidatePhone(req.Phone); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
-}
-
-// resolveTenantForRegistration determines the tenant for the new user
-func (s *userService) resolveTenantForRegistration(ctx context.Context, req *RegisterRequest) (string, error) {
-	// Users are now global - no tenant resolution needed
-	return "", nil
-}
-
-// validateProvidedTenantID validates that a provided tenant ID exists and is active
-func (s *userService) validateProvidedTenantID(ctx context.Context, tenantID string) (string, error) {
-	if tenantID == "" {
-		return "", errors.New("tenant ID is required")
-	}
-
-	// Try to parse as UUID first
-	if _, err := uuid.Parse(tenantID); err == nil {
-		// It's a valid UUID, verify tenant exists
-		tenant, err := s.repo.Tenant().GetByID(ctx, tenantID)
-		if err != nil {
-			return "", fmt.Errorf("invalid tenant ID: %w", err)
+	if req.Address != "" {
+		if err := validation.ValidateAddress(req.Address); err != nil {
+			return nil, err
 		}
-		// TODO: Add tenant status check if tenants can be deactivated
-		return tenant.ID.String(), nil
 	}
 
-	// Not a UUID, treat as domain
-	tenant, err := s.repo.Tenant().GetByDomain(ctx, tenantID)
+	// Check for existing user (normalize email before lookup)
+	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	if existing, _ := s.repo.User().GetByEmail(ctx, normalizedEmail); existing != nil {
+		return nil, ErrUserAlreadyExists
+	}
+
+	// Hash password
+	hash, err := s.passwordService.Hash(req.Password)
 	if err != nil {
-		return "", fmt.Errorf("invalid tenant domain: %w", err)
-	}
-	// TODO: Add tenant status check if tenants can be deactivated
-	return tenant.ID.String(), nil
-}
-
-// resolveTenantBySubdomain resolves tenant by subdomain (e.g., "fligno" -> "fligno.sprout.com")
-func (s *userService) resolveTenantBySubdomain(ctx context.Context, subdomain string) (string, error) {
-	// Construct full domain (subdomain + base domain)
-	baseDomain := "sprout.com" // Configure this in environment variables
-	fullDomain := fmt.Sprintf("%s.%s", subdomain, baseDomain)
-
-	// Try to find existing tenant
-	tenant, err := s.repo.Tenant().GetByDomain(ctx, fullDomain)
-	if err == nil {
-		return tenant.ID.String(), nil
+		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	// Create new tenant if it doesn't exist
-	newTenant := &models.Tenant{
-		Name:   fmt.Sprintf("%s Organization", strings.Title(subdomain)),
-		Domain: fullDomain,
-	}
-
-	if err := s.repo.Tenant().Create(ctx, newTenant); err != nil {
-		return "", fmt.Errorf("failed to create tenant for subdomain %s: %w", subdomain, err)
-	}
-
-	return newTenant.ID.String(), nil
-}
-
-// autoAssignTenantByEmailDomain automatically assigns tenant based on email domain
-func (s *userService) autoAssignTenantByEmailDomain(ctx context.Context, email string) (string, error) {
-	emailDomain := extractDomainFromEmail(email)
-	if emailDomain != "" {
-		// Try to find tenant by domain
-		tenant, err := s.repo.Tenant().GetByDomain(ctx, emailDomain)
-		if err == nil {
-			return tenant.ID.String(), nil
-		}
-	}
-
-	// Reject registration if no valid tenant found
-	return "", errors.New("no valid tenant found for email domain")
-}
-
-// createUserAccount creates the user account with hashed password
-func (s *userService) createUserAccount(ctx context.Context, req *RegisterRequest) (*models.User, error) {
-	// Hash password asynchronously for better performance
-	passwordHashChan := s.hashPasswordAsync(req.Password)
-	passwordHashResult := <-passwordHashChan
-	if passwordHashResult.Error != nil {
-		return nil, fmt.Errorf("failed to hash password: %w", passwordHashResult.Error)
-	}
-
-	// Create user model
+	// Prepare model
 	user := &models.User{
-		Email:        req.Email,
-		PasswordHash: passwordHashResult.Hash,
-		IsSuperadmin: false,
-		GlobalRole:   "user",
+		Email:        normalizedEmail,
+		PasswordHash: hash,
 		Firstname:    safeStringToPointer(req.FirstName),
 		Lastname:     safeStringToPointer(req.LastName),
 		Phone:        safeStringToPointer(req.Phone),
-		Status:       "active",
+		Address:      safeStringToPointer(req.Address),
+		Status:       models.UserStatusActive,
+		GlobalRole:   "user",
+		IsSuperadmin: false,
 	}
 
-	// Save user to database
 	if err := s.repo.User().Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	return user, nil
+	// If invitation token provided, automatically accept the invitation
+	if req.InvitationToken != "" {
+		fmt.Printf("=== AUTO-ACCEPTING INVITATION ===\n")
+		fmt.Printf("User email: %s\n", user.Email)
+
+		// Hash the token for secure lookup (tokens are stored as SHA256 hashes)
+		tokenHash := hashToken(req.InvitationToken)
+
+		// Get the invitation by token hash
+		invitation, err := s.repo.OrganizationInvitation().GetByToken(ctx, tokenHash)
+		if err != nil {
+			fmt.Printf("ERROR: Failed to get invitation by token: %v\n", err)
+		} else if invitation == nil {
+			fmt.Printf("ERROR: Invitation not found for token\n")
+		} else {
+			fmt.Printf("Found invitation: ID=%s, Email=%s, Status=%s\n", invitation.ID, invitation.Email, invitation.Status)
+
+			// Validate invitation status
+			if invitation.Status != models.InvitationStatusPending {
+				fmt.Printf("WARNING: Invitation status is not pending: %s\n", invitation.Status)
+			} else if invitation.ExpiresAt.Before(time.Now()) {
+				fmt.Printf("ERROR: Invitation expired at %s\n", invitation.ExpiresAt)
+			} else if !strings.EqualFold(invitation.Email, user.Email) {
+				fmt.Printf("ERROR: Email mismatch - invitation=%s, user=%s\n", invitation.Email, user.Email)
+			} else {
+				// Validate organization exists and is active
+				org, err := s.repo.Organization().GetByID(ctx, invitation.OrganizationID.String())
+				if err != nil || org == nil {
+					fmt.Printf("ERROR: Organization not found: %v\n", err)
+				} else if org.Status != models.OrganizationStatusActive {
+					fmt.Printf("ERROR: Organization is not active - status=%s\n", org.Status)
+				} else {
+					// Validate role exists
+					role, err := s.repo.Role().GetByID(ctx, invitation.RoleID.String())
+					if err != nil || role == nil {
+						fmt.Printf("ERROR: Role not found: %v\n", err)
+					} else if role.OrganizationID != invitation.OrganizationID {
+						fmt.Printf("ERROR: Role organization mismatch - role.org=%s, invitation.org=%s\n", role.OrganizationID, invitation.OrganizationID)
+					} else {
+						fmt.Printf("Creating membership for user=%s in org=%s with roleID=%s\n", user.ID, invitation.OrganizationID, invitation.RoleID)
+
+						// Create organization membership
+						now := time.Now()
+						membership := &models.OrganizationMembership{
+							OrganizationID: invitation.OrganizationID,
+							UserID:         user.ID,
+							RoleID:         invitation.RoleID,
+							Status:         models.MembershipStatusActive,
+							InvitedBy:      &invitation.InvitedBy,
+							InvitedAt:      &invitation.CreatedAt,
+							JoinedAt:       &now,
+						}
+
+						if err := s.repo.OrganizationMembership().Create(ctx, membership); err != nil {
+							fmt.Printf("ERROR: Failed to create membership: %v\n", err)
+						} else {
+							fmt.Printf("SUCCESS: Membership created\n")
+
+							// Update invitation status
+							invitation.Status = models.InvitationStatusAccepted
+							invitation.AcceptedAt = &now
+							if err := s.repo.OrganizationInvitation().Update(ctx, invitation); err != nil {
+								fmt.Printf("ERROR: Failed to update invitation status: %v\n", err)
+							} else {
+								fmt.Printf("SUCCESS: Invitation marked as accepted\n")
+							}
+						}
+					}
+				}
+			}
+		}
+		fmt.Printf("=== END AUTO-ACCEPT ===\n")
+	}
+
+	return &RegisterGlobalResponse{
+		User: s.convertToUserProfile(user),
+	}, nil
 }
 
-// createUserSessionAndTokens creates session and refresh token for the user
-func (s *userService) createUserSessionAndTokens(ctx context.Context, user *models.User, tokenPair *TokenPair) error {
-	// Create session
-	session := &models.UserSession{
-		UserID:    user.ID,
-		TokenHash: generateCryptographicallySecureToken(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}
-	if err := s.repo.UserSession().Create(ctx, session); err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	// Create refresh token
-	refreshToken := &models.RefreshToken{
-		UserID:    user.ID,
-		TokenHash: tokenPair.RefreshToken,
-		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
-	}
-	if err := s.repo.RefreshToken().Create(ctx, refreshToken); err != nil {
-		return fmt.Errorf("failed to create refresh token: %w", err)
-	}
-
-	return nil
-}
-
-// Login authenticates a user
-func (s *userService) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
-	// Validate request
-	if err := validation.ValidateEmail(req.Email); err != nil {
+// LoginGlobal authenticates the GLOBAL account (no org yet) and returns org memberships
+func (s *userService) LoginGlobal(ctx context.Context, req *LoginGlobalRequest) (*LoginGlobalResponse, error) {
+	if err := validation.ValidateLogin(req.Email); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Get user by email (users are now global)
-	user, err := s.repo.User().GetByEmail(ctx, req.Email)
-	if err != nil {
-		return nil, fmt.Errorf("invalid credentials: %w", err)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+
+	if s.isAccountLocked(ctx, email, req.ClientIP) {
+		return nil, errors.New("account temporarily locked due to failed attempts")
 	}
 
-	// Check if user is active
-	if user.Status != "active" {
+	user, err := s.repo.User().GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		// user may be nil / not found
+		s.recordFailedAttempt(ctx, email, req.ClientIP, nil)
+		return nil, ErrInvalidCredentials
+	}
+
+	if user.Status != models.UserStatusActive {
 		return nil, errors.New("account is deactivated")
 	}
 
-	// Verify password
 	valid, err := s.passwordService.Verify(req.Password, user.PasswordHash)
-	if err != nil {
-		return nil, errors.New("invalid credentials")
+	if err != nil || !valid {
+		s.recordFailedAttempt(ctx, email, req.ClientIP, &user.ID)
+		return nil, ErrInvalidCredentials
 	}
-	if !valid {
-		return nil, errors.New("invalid credentials")
-	}
+
+	// Clear lockout state
+	s.clearFailedAttempts(ctx, email, req.ClientIP)
 
 	// Update last login
 	if err := s.repo.User().UpdateLastLogin(ctx, user.ID.String()); err != nil {
-		// Log error but don't fail login
 		fmt.Printf("Failed to update last login: %v\n", err)
 	}
 
-	// Generate tokens
-	tokenPair, err := s.generateTokenPair(user)
+	// Load org memberships (Slack-style)
+	memberships, err := s.repo.OrganizationMembership().GetByUser(ctx, user.ID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load organizations: %w", err)
+	}
+
+	orgDTOs := make([]*OrganizationMembership, 0, len(memberships))
+	for _, m := range memberships {
+		org, err := s.repo.Organization().GetByID(ctx, m.OrganizationID.String())
+		if err != nil || org == nil {
+			continue
+		}
+
+		// Always load role by ID (GORM may not preload Role relation)
+		role, err := s.repo.Role().GetByID(ctx, m.RoleID.String())
+		roleName := ""
+		if err == nil && role != nil {
+			roleName = role.Name
+		}
+
+		orgDTOs = append(orgDTOs, &OrganizationMembership{
+			OrganizationID:   org.ID.String(),
+			OrganizationName: org.Name,
+			OrganizationSlug: org.Slug,
+			Role:             roleName,
+			Status:           m.Status,
+			JoinedAt:         m.JoinedAt,
+		})
+	}
+
+	return &LoginGlobalResponse{
+		User:          s.convertToUserProfile(user),
+		Organizations: orgDTOs,
+	}, nil
+}
+
+// GetMyOrganizations returns org memberships for a global user
+func (s *userService) GetMyOrganizations(ctx context.Context, userID string) ([]*OrganizationMembership, error) {
+	if userID == "" {
+		return nil, errors.New("user ID is required")
+	}
+
+	memberships, err := s.repo.OrganizationMembership().GetByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load organizations: %w", err)
+	}
+
+	orgDTOs := make([]*OrganizationMembership, 0, len(memberships))
+	for _, m := range memberships {
+		org, err := s.repo.Organization().GetByID(ctx, m.OrganizationID.String())
+		if err != nil || org == nil {
+			continue
+		}
+
+		// Always load role by ID (GORM may not preload Role relation)
+		role, err := s.repo.Role().GetByID(ctx, m.RoleID.String())
+		roleName := ""
+		if err == nil && role != nil {
+			roleName = role.Name
+		}
+
+		orgDTOs = append(orgDTOs, &OrganizationMembership{
+			OrganizationID:   org.ID.String(),
+			OrganizationName: org.Name,
+			OrganizationSlug: org.Slug,
+			Role:             roleName,
+			Status:           m.Status,
+			JoinedAt:         m.JoinedAt,
+		})
+	}
+
+	return orgDTOs, nil
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// ORGANIZATION CREATION & ORG-SCOPED TOKEN ISSUANCE
+// ───────────────────────────────────────────────────────────────────────────────
+
+// CreateOrganization creates a Slack-style organization and makes user=admin
+func (s *userService) CreateOrganization(ctx context.Context, userID string, req *CreateOrganizationRequest) (*CreateOrganizationResponse, error) {
+	if userID == "" {
+		return nil, errors.New("user ID is required")
+	}
+
+	if err := validation.ValidateOrganizationName(req.Name); err != nil {
+		return nil, err
+	}
+	if !validation.IsValidSlug(req.Slug) {
+		return nil, errors.New("invalid organization slug format")
+	}
+
+	// Ensure slug is unique
+	existing, err := s.repo.Organization().GetBySlug(ctx, req.Slug)
+	if err == nil && existing != nil {
+		return nil, errors.New("organization slug already in use")
+	}
+	// If error is not "record not found", return it
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("failed to check slug availability: %w", err)
+	}
+
+	creator, err := s.repo.User().GetByID(ctx, userID)
+	if err != nil || creator == nil {
+		return nil, errors.New("user not found")
+	}
+	if creator.Status != models.UserStatusActive {
+		return nil, errors.New("user is not active")
+	}
+
+	org := &models.Organization{
+		Name:      req.Name,
+		Slug:      strings.ToLower(strings.TrimSpace(req.Slug)),
+		Status:    models.OrganizationStatusActive,
+		CreatedBy: creator.ID,
+	}
+
+	if req.Description != nil && *req.Description != "" {
+		org.Description = req.Description
+	}
+
+	if err := s.repo.Organization().Create(ctx, org); err != nil {
+		return nil, fmt.Errorf("failed to create organization: %w", err)
+	}
+
+	// Create default admin role for this organization
+	adminRole, err := s.repo.CreateDefaultAdminRole(ctx, org.ID.String(), creator.ID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create default admin role: %w", err)
+	}
+
+	// Creator becomes admin member
+	now := time.Now()
+	m := &models.OrganizationMembership{
+		OrganizationID: org.ID,
+		UserID:         creator.ID,
+		RoleID:         adminRole.ID,
+		Status:         models.MembershipStatusActive,
+		JoinedAt:       &now,
+	}
+
+	if err := s.repo.OrganizationMembership().Create(ctx, m); err != nil {
+		return nil, fmt.Errorf("failed to create organization membership: %w", err)
+	}
+
+	// Create initial session + token for this org (no ClientIP in CreateOrganizationRequest)
+	session, err := s.createSession(ctx, creator, org.ID, "", "org-create:"+req.Slug)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	tokenPair, refreshID, err := s.issueTokenPair(ctx, creator, org.ID, m.RoleID, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
-	// Create session
-	session := &models.UserSession{
-		UserID:    user.ID,
-		TokenHash: generateCryptographicallySecureToken(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}
-	if err := s.repo.UserSession().Create(ctx, session); err != nil {
-		fmt.Printf("Failed to create session: %v\n", err)
+	if err := s.persistRefreshToken(ctx, refreshID, tokenPair.RefreshToken, creator.ID, org.ID, session.ID); err != nil {
+		return nil, fmt.Errorf("failed to persist refresh token: %w", err)
 	}
 
-	// Create refresh token
-	refreshToken := &models.RefreshToken{
-		UserID:    user.ID,
-		TokenHash: tokenPair.RefreshToken,
-		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
-	}
-	if err := s.repo.RefreshToken().Create(ctx, refreshToken); err != nil {
-		fmt.Printf("Failed to create refresh token: %v\n", err)
+	// Load role for response
+	var roleName string
+	if m.Role != nil {
+		roleName = m.Role.Name
+	} else {
+		role, err := s.repo.Role().GetByID(ctx, m.RoleID.String())
+		if err == nil {
+			roleName = role.Name
+		}
 	}
 
-	return &LoginResponse{
-		User:  s.convertToUserProfile(user),
-		Token: tokenPair,
+	orgDTO := &OrganizationMembership{
+		OrganizationID:   org.ID.String(),
+		OrganizationName: org.Name,
+		OrganizationSlug: org.Slug,
+		Role:             roleName,
+		Status:           m.Status,
+		JoinedAt:         m.JoinedAt,
+	}
+
+	return &CreateOrganizationResponse{
+		Organization: orgDTO,
+		Token:        tokenPair,
 	}, nil
 }
 
-// RefreshToken refreshes access token using refresh token
+// SelectOrganization issues an ORG-scoped JWT for a chosen organization
+func (s *userService) SelectOrganization(ctx context.Context, req *SelectOrganizationRequest) (*SelectOrganizationResponse, error) {
+	if req.UserID == "" || req.OrganizationID == "" {
+		return nil, errors.New("user_id and organization_id are required")
+	}
+
+	userUUID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		return nil, errors.New("invalid user_id")
+	}
+	orgUUID, err := uuid.Parse(req.OrganizationID)
+	if err != nil {
+		return nil, errors.New("invalid organization_id")
+	}
+
+	user, err := s.repo.User().GetByID(ctx, userUUID.String())
+	if err != nil || user == nil {
+		return nil, errors.New("user not found")
+	}
+	if user.Status != models.UserStatusActive {
+		return nil, errors.New("account is deactivated")
+	}
+
+	org, err := s.repo.Organization().GetByID(ctx, orgUUID.String())
+	if err != nil || org == nil {
+		return nil, ErrOrgNotFound
+	}
+	if org.Status != models.OrganizationStatusActive {
+		return nil, ErrOrgNotFound
+	}
+
+	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgUUID.String(), userUUID.String())
+	if err != nil || membership == nil {
+		return nil, ErrMembershipNotFound
+	}
+	if membership.Status != models.MembershipStatusActive {
+		return nil, ErrMembershipSuspended
+	}
+
+	// Create session (org-scoped)
+	session, err := s.createSession(ctx, user, org.ID, req.ClientIP, req.UserAgent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Issue org-scoped JWT + refresh
+	tokenPair, refreshID, err := s.issueTokenPair(ctx, user, org.ID, membership.RoleID, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate tokens: %w", err)
+	}
+
+	if err := s.persistRefreshToken(ctx, refreshID, tokenPair.RefreshToken, user.ID, org.ID, session.ID); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	// Load role for response
+	var roleName string
+	if membership.Role != nil {
+		roleName = membership.Role.Name
+	} else {
+		role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
+		if err == nil {
+			roleName = role.Name
+		}
+	}
+
+	orgDTO := &OrganizationMembership{
+		OrganizationID:   org.ID.String(),
+		OrganizationName: org.Name,
+		OrganizationSlug: org.Slug,
+		Role:             roleName,
+		Status:           membership.Status,
+		JoinedAt:         membership.JoinedAt,
+	}
+
+	return &SelectOrganizationResponse{
+		User:         s.convertToUserProfile(user),
+		Organization: orgDTO,
+		Token:        tokenPair,
+	}, nil
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// ORG-SCOPED REFRESH & LOGOUT
+// ───────────────────────────────────────────────────────────────────────────────
+
 func (s *userService) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*RefreshTokenResponse, error) {
 	if req.RefreshToken == "" {
 		return nil, errors.New("refresh token is required")
 	}
 
-	// Get refresh token from database
-	refreshToken, err := s.repo.RefreshToken().GetByToken(ctx, req.RefreshToken)
+	claims, err := s.jwtService.ParseRefreshToken(req.RefreshToken)
 	if err != nil {
-		return nil, fmt.Errorf("invalid refresh token: %w", err)
+		return nil, errors.New("invalid refresh token")
 	}
 
-	// Check if refresh token is expired
-	if time.Now().After(refreshToken.ExpiresAt) {
+	refreshRecord, err := s.repo.RefreshToken().GetByID(ctx, claims.ID)
+	if err != nil || refreshRecord == nil {
+		return nil, errors.New("refresh token not recognized")
+	}
+
+	// Verify JTI matches (prevent replay attacks)
+	if claims.ID != refreshRecord.ID.String() {
+		_ = s.repo.RefreshToken().RevokeBySession(ctx, refreshRecord.SessionID.String(), "jti_mismatch")
+		if s.sessionSvc != nil {
+			_ = s.sessionSvc.RevokeSession(ctx, refreshRecord.SessionID.String(), "jti_mismatch")
+		}
+		return nil, errors.New("refresh token invalidated - JTI mismatch")
+	}
+
+	if refreshRecord.RevokedAt != nil {
+		return nil, errors.New("refresh token already used or revoked")
+	}
+
+	if time.Now().After(refreshRecord.ExpiresAt) {
+		_ = s.repo.RefreshToken().Revoke(ctx, refreshRecord.ID.String(), "expired")
 		return nil, errors.New("refresh token expired")
 	}
 
-	// Get user
-	user, err := s.repo.User().GetByID(ctx, refreshToken.UserID.String())
-	if err != nil {
-		return nil, fmt.Errorf("user not found: %w", err)
+	// Verify bound session & user/org (SHA256 comparison)
+	computedHash := hashToken(req.RefreshToken)
+
+	if computedHash != refreshRecord.TokenHash {
+		// Security measure: revoke entire session chain
+		_ = s.repo.RefreshToken().RevokeBySession(ctx, refreshRecord.SessionID.String(), "token_hash_mismatch")
+		if s.sessionSvc != nil {
+			_ = s.sessionSvc.RevokeSession(ctx, refreshRecord.SessionID.String(), "token_hash_mismatch")
+		}
+		return nil, errors.New("refresh token invalidated")
 	}
 
-	// Check if user is active
+	user, err := s.repo.User().GetByID(ctx, refreshRecord.UserID.String())
+	if err != nil || user == nil {
+		return nil, fmt.Errorf("user not found: %w", err)
+	}
 	if user.Status != models.UserStatusActive {
 		return nil, errors.New("account is deactivated")
 	}
 
-	// Generate new token pair
-	tokenPair, err := s.generateTokenPair(user)
+	// Optional: ensure membership still valid
+	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, refreshRecord.OrganizationID.String(), user.ID.String())
+	if err != nil || membership == nil || membership.Status != models.MembershipStatusActive {
+		return nil, errors.New("organization membership is not active")
+	}
+
+	// Rotate refresh token (revoke old)
+	if err := s.repo.RefreshToken().Revoke(ctx, refreshRecord.ID.String(), "rotated"); err != nil {
+		return nil, fmt.Errorf("failed to revoke refresh token: %w", err)
+	}
+
+	tokenPair, newRefreshID, err := s.issueTokenPair(ctx, user, refreshRecord.OrganizationID, membership.RoleID, refreshRecord.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
-	// Update refresh token
-	refreshToken.TokenHash = tokenPair.RefreshToken
-	refreshToken.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
-	if err := s.repo.RefreshToken().Update(ctx, refreshToken); err != nil {
-		fmt.Printf("Failed to update refresh token: %v\n", err)
+	if err := s.persistRefreshToken(ctx, newRefreshID, tokenPair.RefreshToken, user.ID, refreshRecord.OrganizationID, refreshRecord.SessionID); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
-	return &RefreshTokenResponse{
-		Token: tokenPair,
-	}, nil
+	return &RefreshTokenResponse{Token: tokenPair}, nil
 }
 
-// Logout logs out a user
 func (s *userService) Logout(ctx context.Context, req *LogoutRequest) error {
 	if req.UserID == "" {
 		return errors.New("user ID is required")
 	}
 
-	// Delete refresh token if provided
+	// Revoke provided refresh token
 	if req.RefreshToken != "" {
-		if err := s.repo.RefreshToken().Delete(ctx, req.RefreshToken); err != nil {
-			fmt.Printf("Failed to delete refresh token: %v\n", err)
+		if claims, err := s.jwtService.ParseRefreshToken(req.RefreshToken); err == nil {
+			_ = s.repo.RefreshToken().Revoke(ctx, claims.ID, "logout")
 		}
 	}
 
-	// Delete all sessions for user (optional - could be selective)
-	if err := s.repo.UserSession().DeleteByUserID(ctx, req.UserID); err != nil {
-		fmt.Printf("Failed to delete user sessions: %v\n", err)
+	if req.SessionID != "" {
+		if s.sessionSvc != nil {
+			_ = s.sessionSvc.RevokeSession(ctx, req.SessionID, "logout")
+		}
+		_ = s.repo.UserSession().Revoke(ctx, req.SessionID, "logout")
+		_ = s.repo.RefreshToken().RevokeBySession(ctx, req.SessionID, "logout")
+	} else {
+		// Kill all sessions for user
+		_ = s.repo.UserSession().DeleteByUserID(ctx, req.UserID)
+		_ = s.repo.RefreshToken().DeleteByUserID(ctx, req.UserID)
 	}
 
 	return nil
 }
 
-// GetProfile gets user profile
+// ───────────────────────────────────────────────────────────────────────────────
+// PROFILE & PASSWORD
+// ───────────────────────────────────────────────────────────────────────────────
+
 func (s *userService) GetProfile(ctx context.Context, userID string) (*UserProfile, error) {
 	if userID == "" {
 		return nil, errors.New("user ID is required")
 	}
 
 	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
+	if err != nil || user == nil {
 		return nil, fmt.Errorf("user not found: %w", err)
 	}
 
 	return s.convertToUserProfile(user), nil
 }
 
-// UpdateProfile updates user profile
 func (s *userService) UpdateProfile(ctx context.Context, userID string, req *UpdateProfileRequest) (*UserProfile, error) {
 	if userID == "" {
 		return nil, errors.New("user ID is required")
 	}
 
-	// Validate optional fields
-	if req.FirstName != "" {
-		if err := validation.ValidateName(req.FirstName, "first name"); err != nil {
+	// Validate provided fields (only if not nil)
+	if req.FirstName != nil && *req.FirstName != "" {
+		if err := validation.ValidateName(*req.FirstName, "first name"); err != nil {
 			return nil, err
 		}
 	}
-	if req.LastName != "" {
-		if err := validation.ValidateName(req.LastName, "last name"); err != nil {
+	if req.LastName != nil && *req.LastName != "" {
+		if err := validation.ValidateName(*req.LastName, "last name"); err != nil {
 			return nil, err
 		}
 	}
-	if req.Phone != "" {
-		if err := validation.ValidatePhone(req.Phone); err != nil {
+	if req.Phone != nil && *req.Phone != "" {
+		if err := validation.ValidatePhone(*req.Phone); err != nil {
+			return nil, err
+		}
+	}
+	if req.Address != nil && *req.Address != "" {
+		if err := validation.ValidateAddress(*req.Address); err != nil {
 			return nil, err
 		}
 	}
 
-	// Get current user
 	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
+	if err != nil || user == nil {
 		return nil, fmt.Errorf("user not found: %w", err)
 	}
 
-	// Update fields
-	if req.FirstName != "" {
-		user.Firstname = &req.FirstName
+	// Update fields (nil = no change, empty string = clear field, value = update)
+	if req.FirstName != nil {
+		user.Firstname = req.FirstName
 	}
-	if req.LastName != "" {
-		user.Lastname = &req.LastName
+	if req.LastName != nil {
+		user.Lastname = req.LastName
 	}
-	if req.Phone != "" {
-		user.Phone = &req.Phone
+	if req.Phone != nil {
+		user.Phone = req.Phone
+	}
+	if req.Address != nil {
+		user.Address = req.Address
 	}
 
-	// Save changes
 	if err := s.repo.User().Update(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to update profile: %w", err)
 	}
@@ -573,13 +883,11 @@ func (s *userService) UpdateProfile(ctx context.Context, userID string, req *Upd
 	return s.convertToUserProfile(user), nil
 }
 
-// ChangePassword changes user password
 func (s *userService) ChangePassword(ctx context.Context, userID string, req *ChangePasswordRequest) error {
 	if userID == "" {
 		return errors.New("user ID is required")
 	}
 
-	// Validate new password
 	if err := validation.ValidatePassword(req.NewPassword); err != nil {
 		return fmt.Errorf("invalid new password: %w", err)
 	}
@@ -587,139 +895,118 @@ func (s *userService) ChangePassword(ctx context.Context, userID string, req *Ch
 		return err
 	}
 
-	// Get user
 	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
+	if err != nil || user == nil {
 		return fmt.Errorf("user not found: %w", err)
 	}
 
-	// Verify current password
 	valid, err := s.passwordService.Verify(req.CurrentPassword, user.PasswordHash)
-	if err != nil {
-		return errors.New("current password is incorrect")
-	}
-	if !valid {
+	if err != nil || !valid {
 		return errors.New("current password is incorrect")
 	}
 
-	// Hash new password asynchronously for better performance
 	passwordHashChan := s.hashPasswordAsync(req.NewPassword)
-	passwordHashResult := <-passwordHashChan
-	if passwordHashResult.Error != nil {
-		return fmt.Errorf("failed to hash password: %w", passwordHashResult.Error)
+	res := <-passwordHashChan
+	if res.Error != nil {
+		return fmt.Errorf("failed to hash password: %w", res.Error)
 	}
 
-	// Update password
-	if err := s.repo.User().UpdatePassword(ctx, userID, passwordHashResult.Hash); err != nil {
+	if err := s.repo.User().UpdatePassword(ctx, userID, res.Hash); err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
 	}
 
-	// Invalidate all refresh tokens for security
-	if err := s.repo.RefreshToken().DeleteByUserID(ctx, userID); err != nil {
-		fmt.Printf("Failed to invalidate refresh tokens: %v\n", err)
-	}
+	// Invalidate all refresh tokens
+	_ = s.repo.RefreshToken().DeleteByUserID(ctx, userID)
 
 	return nil
 }
 
-// ForgotPassword initiates password reset
 func (s *userService) ForgotPassword(ctx context.Context, req *ForgotPasswordRequest) error {
-	if err := validation.ValidateEmail(req.Email); err != nil {
+	if err := validation.ValidateForgotPassword(req.Email); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Check if user exists
-	user, err := s.repo.User().GetByEmail(ctx, req.Email)
-	if err != nil {
-		// Don't reveal if user exists or not for security
+	// Normalize email before lookup
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	user, err := s.repo.User().GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		// Don't reveal if user exists
 		return nil
 	}
 
-	// Check if user is active
 	if user.Status != models.UserStatusActive {
-		return nil // Don't reveal deactivated accounts
+		return nil
 	}
 
-	// Generate reset token (15 minutes expiry)
-	resetToken := generateCryptographicallySecureToken()
+	// Create secure random token (string) for email link
+	rawToken := generateCryptographicallySecureToken()
 
-	// Create password reset record
+	// Hash token for DB using SHA256 (same as refresh tokens - bcrypt is too slow for tokens)
+	tokenHash := hashToken(rawToken)
+
 	reset := &models.PasswordReset{
 		UserID:    user.ID,
-		TokenHash: resetToken,
-		ExpiresAt: time.Now().Add(15 * time.Minute), // 15 minutes
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(15 * time.Minute),
 	}
 
 	if err := s.repo.PasswordReset().Create(ctx, reset); err != nil {
 		return fmt.Errorf("failed to create password reset: %w", err)
 	}
 
-	// Send password reset email
 	if s.emailSvc != nil {
-		if err := s.emailSvc.SendPasswordResetEmail(req.Email, resetToken); err != nil {
-			// Log error but don't fail the request
+		if err := s.emailSvc.SendPasswordResetEmail(email, rawToken); err != nil {
 			fmt.Printf("Failed to send password reset email: %v\n", err)
 		}
 	} else {
-		// Log for development
-		fmt.Printf("Password reset token for %s: %s\n", req.Email, resetToken)
+		fmt.Printf("Password reset token for %s: %s\n", email, rawToken)
 	}
 
 	return nil
 }
 
-// ResetPassword resets user password using token
 func (s *userService) ResetPassword(ctx context.Context, req *ResetPasswordRequest) error {
 	if err := validation.ValidatePasswordReset(req.Token, req.NewPassword, req.ConfirmPassword); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Get password reset record
+	// Look up reset record via repository, which should verify token hash
 	reset, err := s.repo.PasswordReset().GetByToken(ctx, req.Token)
-	if err != nil {
+	if err != nil || reset == nil {
 		return errors.New("invalid or expired reset token")
 	}
 
-	// Check if token is expired
 	if time.Now().After(reset.ExpiresAt) {
 		return errors.New("reset token expired")
 	}
 
-	// Get user
 	user, err := s.repo.User().GetByID(ctx, reset.UserID.String())
-	if err != nil {
+	if err != nil || user == nil {
 		return fmt.Errorf("user not found: %w", err)
 	}
 
-	// Hash new password asynchronously for better performance
 	passwordHashChan := s.hashPasswordAsync(req.NewPassword)
-	passwordHashResult := <-passwordHashChan
-	if passwordHashResult.Error != nil {
-		return fmt.Errorf("failed to hash password: %w", passwordHashResult.Error)
+	res := <-passwordHashChan
+	if res.Error != nil {
+		return fmt.Errorf("failed to hash password: %w", res.Error)
 	}
 
-	// Update password
-	if err := s.repo.User().UpdatePassword(ctx, user.ID.String(), passwordHashResult.Hash); err != nil {
+	if err := s.repo.User().UpdatePassword(ctx, user.ID.String(), res.Hash); err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
 	}
 
-	// Delete the reset token
-	if err := s.repo.PasswordReset().Delete(ctx, req.Token); err != nil {
-		fmt.Printf("Failed to delete reset token: %v\n", err)
-	}
-
-	// Invalidate all refresh tokens for security
-	if err := s.repo.RefreshToken().DeleteByUserID(ctx, user.ID.String()); err != nil {
-		fmt.Printf("Failed to invalidate refresh tokens: %v\n", err)
-	}
+	// Delete reset token by ID (not raw token - DB stores hash)
+	_ = s.repo.PasswordReset().DeleteByID(ctx, reset.ID.String())
+	_ = s.repo.RefreshToken().DeleteByUserID(ctx, user.ID.String())
 
 	return nil
 }
 
-// ListUsers lists users with cursor-based pagination
+// ───────────────────────────────────────────────────────────────────────────────
+// ADMIN (GLOBAL SUPERADMIN ONLY)
+// ───────────────────────────────────────────────────────────────────────────────
+
 func (s *userService) ListUsers(ctx context.Context, limit int, cursor string) (*UserListResponse, error) {
-	// For now, only superadmins can list all users
-	// TODO: Add organization-based filtering when organization context is available
 	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
 	if !isSuperadmin {
 		return nil, errors.New("insufficient permissions")
@@ -735,40 +1022,29 @@ func (s *userService) ListUsers(ctx context.Context, limit int, cursor string) (
 		return nil, fmt.Errorf("failed to count users: %w", err)
 	}
 
-	userProfiles := make([]*UserProfile, len(users))
-	for i, user := range users {
-		userProfiles[i] = s.convertToUserProfile(user)
+	profiles := make([]*UserProfile, len(users))
+	for i, u := range users {
+		profiles[i] = s.convertToUserProfile(u)
 	}
 
-	// Determine next cursor (ID of last user if we got a full page)
 	var nextCursor string
 	if len(users) == limit {
 		nextCursor = users[len(users)-1].ID.String()
 	}
 
 	return &UserListResponse{
-		Users:      userProfiles,
+		Users:      profiles,
 		Total:      total,
 		Limit:      limit,
 		NextCursor: nextCursor,
 	}, nil
 }
 
-// getTenantID extracts tenant ID from context
-func getTenantID(ctx context.Context) string {
-	if tenantID, ok := ctx.Value("tenant_id").(string); ok {
-		return tenantID
-	}
-	return ""
-}
-
-// ActivateUser activates a user account
 func (s *userService) ActivateUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errors.New("user ID is required")
 	}
 
-	// Check superadmin permission
 	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
 	if !isSuperadmin {
 		return errors.New("superadmin permission required")
@@ -784,25 +1060,18 @@ func (s *userService) ActivateUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// DeactivateUser deactivates a user account
 func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errors.New("user ID is required")
 	}
 
-	// Check superadmin permission
 	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
 	if !isSuperadmin {
 		return errors.New("superadmin permission required")
 	}
 
-	// Invalidate all sessions and refresh tokens
-	if err := s.repo.UserSession().DeleteByUserID(ctx, userID); err != nil {
-		fmt.Printf("Failed to delete user sessions: %v\n", err)
-	}
-	if err := s.repo.RefreshToken().DeleteByUserID(ctx, userID); err != nil {
-		fmt.Printf("Failed to delete refresh tokens: %v\n", err)
-	}
+	_ = s.repo.UserSession().DeleteByUserID(ctx, userID)
+	_ = s.repo.RefreshToken().DeleteByUserID(ctx, userID)
 
 	err := s.repo.User().Deactivate(ctx, userID)
 	if err != nil {
@@ -814,19 +1083,16 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// DeleteUser deletes a user account
 func (s *userService) DeleteUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errors.New("user ID is required")
 	}
 
-	// Check superadmin permission
 	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
 	if !isSuperadmin {
 		return errors.New("superadmin permission required")
 	}
 
-	// Start transaction
 	tx, err := s.repo.BeginTransaction(ctx)
 	if err != nil {
 		s.auditLogger.LogAdminAction("system", "delete_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to start transaction for user deletion")
@@ -834,29 +1100,21 @@ func (s *userService) DeleteUser(ctx context.Context, userID string) error {
 	}
 	defer tx.Rollback()
 
-	// Delete all related data
 	if err := tx.UserSession().DeleteByUserID(ctx, userID); err != nil {
-		s.auditLogger.LogAdminAction("system", "delete_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to delete user sessions")
 		return fmt.Errorf("failed to delete sessions: %w", err)
 	}
 	if err := tx.RefreshToken().DeleteByUserID(ctx, userID); err != nil {
-		s.auditLogger.LogAdminAction("system", "delete_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to delete refresh tokens")
 		return fmt.Errorf("failed to delete refresh tokens: %w", err)
 	}
 	if err := tx.PasswordReset().DeleteExpired(ctx); err != nil {
-		// This is a cleanup, don't fail if it errors
 		fmt.Printf("Failed to cleanup password resets: %v\n", err)
 	}
 
-	// Delete user
 	if err := tx.User().Delete(ctx, userID); err != nil {
-		s.auditLogger.LogAdminAction("system", "delete_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to delete user account")
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		s.auditLogger.LogAdminAction("system", "delete_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to commit transaction")
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -864,7 +1122,10 @@ func (s *userService) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// GetUserSessions retrieves all sessions for a user
+// ───────────────────────────────────────────────────────────────────────────────
+// SESSION MANAGEMENT
+// ───────────────────────────────────────────────────────────────────────────────
+
 func (s *userService) GetUserSessions(ctx context.Context, userID string) ([]*models.UserSession, error) {
 	if s.sessionSvc != nil {
 		return s.sessionSvc.GetUserSessions(ctx, userID)
@@ -872,15 +1133,13 @@ func (s *userService) GetUserSessions(ctx context.Context, userID string) ([]*mo
 	return s.repo.UserSession().GetByUserID(ctx, userID)
 }
 
-// RevokeUserSession revokes a specific user session
 func (s *userService) RevokeUserSession(ctx context.Context, userID, sessionID, reason string) error {
 	if userID == "" || sessionID == "" {
 		return errors.New("user ID and session ID are required")
 	}
 
-	// Verify the session belongs to the user
 	session, err := s.repo.UserSession().GetByID(ctx, sessionID)
-	if err != nil {
+	if err != nil || session == nil {
 		return fmt.Errorf("session not found: %w", err)
 	}
 
@@ -895,88 +1154,188 @@ func (s *userService) RevokeUserSession(ctx context.Context, userID, sessionID, 
 	return s.repo.UserSession().Revoke(ctx, sessionID, reason)
 }
 
-// Helper methods
+// ───────────────────────────────────────────────────────────────────────────────
+// INTERNAL HELPERS
+// ───────────────────────────────────────────────────────────────────────────────
 
-// generateTokenPair generates access and refresh tokens
-func (s *userService) generateTokenPair(user *models.User) (*TokenPair, error) {
-	accessToken, err := s.jwtService.GenerateAccessToken(user)
-	if err != nil {
+// createSession creates a persistent session record (ORG-SCOPED)
+func (s *userService) createSession(ctx context.Context, user *models.User, organizationID uuid.UUID, clientIP, userAgent string) (*models.UserSession, error) {
+	if s.sessionSvc != nil {
+		return s.sessionSvc.CreateSession(ctx, user.ID.String(), organizationID.String(), clientIP, userAgent)
+	}
+
+	session := &models.UserSession{
+		UserID:         user.ID,
+		OrganizationID: organizationID,
+		TokenHash:      generateCryptographicallySecureToken(),
+		IPAddress:      clientIP,
+		UserAgent:      userAgent,
+		IsActive:       true,
+		LastActivity:   time.Now(),
+		ExpiresAt:      time.Now().Add(24 * time.Hour),
+	}
+
+	if err := s.repo.UserSession().Create(ctx, session); err != nil {
 		return nil, err
 	}
 
-	refreshToken, err := s.jwtService.GenerateRefreshToken(user)
-	if err != nil {
-		return nil, err
-	}
-
-	return &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    3600, // 1 hour
-		TokenType:    "Bearer",
-	}, nil
+	return session, nil
 }
 
-// convertToUserProfile converts model to profile
+// issueTokenPair generates org- & session-bound JWTs and returns refresh token ID
+func (s *userService) issueTokenPair(ctx context.Context, user *models.User, organizationID uuid.UUID, roleID uuid.UUID, sessionID uuid.UUID) (*TokenPair, string, error) {
+	// Load role to get name
+	role, err := s.repo.Role().GetByID(ctx, roleID.String())
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load role: %w", err)
+	}
+
+	// Get user permissions for this role (with caching)
+	permissions, err := s.getRolePermissionsWithCache(ctx, role)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load permissions: %w", err)
+	}
+
+	tokenCtx := &jwt.TokenContext{
+		UserID:           user.ID,
+		OrganizationID:   organizationID,
+		SessionID:        sessionID,
+		RoleID:           roleID,
+		Email:            user.Email,
+		GlobalRole:       user.GlobalRole,
+		OrganizationRole: role.Name,
+		Permissions:      permissions,
+		IsSuperadmin:     user.IsSuperadmin,
+	}
+
+	accessToken, err := s.jwtService.GenerateAccessToken(tokenCtx)
+	if err != nil {
+		return nil, "", err
+	}
+
+	refreshToken, refreshID, err := s.jwtService.GenerateRefreshToken(tokenCtx)
+	if err != nil {
+		return nil, "", err
+	}
+
+	tokenPair := &TokenPair{
+		AccessToken:    accessToken,
+		RefreshToken:   refreshToken,
+		ExpiresIn:      3600,
+		TokenType:      "Bearer",
+		SessionID:      sessionID.String(),
+		OrganizationID: organizationID.String(),
+	}
+
+	return tokenPair, refreshID, nil
+}
+
+// getRolePermissionsWithCache fetches permissions with Redis caching
+func (s *userService) getRolePermissionsWithCache(ctx context.Context, role *models.Role) ([]string, error) {
+	// Admin gets all permissions
+	if role.Name == models.RoleNameAdmin && role.IsSystem {
+		return models.DefaultAdminPermissions(), nil
+	}
+
+	// Try cache first (if Redis available)
+	if s.redisClient != nil {
+		cacheKey := fmt.Sprintf("role:permissions:%s", role.ID.String())
+		cached, err := s.redisClient.Get(ctx, cacheKey).Result()
+		if err == nil && cached != "" {
+			// Parse cached permissions (JSON array)
+			var permissions []string
+			if err := json.Unmarshal([]byte(cached), &permissions); err == nil {
+				return permissions, nil
+			}
+		}
+	}
+
+	// Fetch from DB
+	perms, err := s.repo.Permission().GetRolePermissions(ctx, role.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	permissions := make([]string, len(perms))
+	for i, p := range perms {
+		permissions[i] = p.Name
+	}
+
+	// Cache for 5 minutes (if Redis available)
+	if s.redisClient != nil {
+		cacheKey := fmt.Sprintf("role:permissions:%s", role.ID.String())
+		if jsonPerms, err := json.Marshal(permissions); err == nil {
+			_ = s.redisClient.Set(ctx, cacheKey, string(jsonPerms), 5*time.Minute).Err()
+		}
+	}
+
+	return permissions, nil
+}
+
+// persistRefreshToken hashes and stores a refresh token tied to a session & org
+func (s *userService) persistRefreshToken(ctx context.Context, refreshID string, refreshToken string, userID, organizationID, sessionID uuid.UUID) error {
+	if refreshID == "" {
+		return errors.New("refresh token ID is required")
+	}
+
+	refreshUUID, err := uuid.Parse(refreshID)
+	if err != nil {
+		return fmt.Errorf("invalid refresh token id: %w", err)
+	}
+
+	// Use SHA256 for hashing refresh tokens (they're too long for password hashing)
+	tokenHash := hashToken(refreshToken)
+
+	claims, err := s.jwtService.ParseRefreshToken(refreshToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse refresh token claims: %w", err)
+	}
+
+	record := &models.RefreshToken{
+		ID:             refreshUUID,
+		UserID:         userID,
+		OrganizationID: organizationID,
+		SessionID:      sessionID,
+		TokenHash:      tokenHash,
+		ExpiresAt:      claims.ExpiresAt.Time,
+	}
+
+	return s.repo.RefreshToken().Create(ctx, record)
+}
+
+// convertToUserProfile maps model to DTO
 func (s *userService) convertToUserProfile(user *models.User) *UserProfile {
-	profile := &UserProfile{
-		ID:        user.ID.String(),
-		Email:     user.Email,
-		UserType:  "user", // Default user type for global users
-		TenantID:  "",     // No tenant for global users
-		FirstName: safeStringDereference(user.Firstname),
-		LastName:  safeStringDereference(user.Lastname),
-		Phone:     safeStringDereference(user.Phone),
-		IsActive:  user.Status == models.UserStatusActive,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
+	p := &UserProfile{
+		ID:           user.ID.String(),
+		Email:        user.Email,
+		FirstName:    safeStringDereference(user.Firstname),
+		LastName:     safeStringDereference(user.Lastname),
+		Phone:        safeStringDereference(user.Phone),
+		Address:      safeStringDereference(user.Address),
+		GlobalRole:   user.GlobalRole,
+		IsSuperadmin: user.IsSuperadmin,
+		IsActive:     user.Status == models.UserStatusActive,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
 	}
 
 	if user.LastLoginAt != nil {
-		profile.LastLogin = user.LastLoginAt
+		p.LastLogin = user.LastLoginAt
 	}
 
-	return profile
+	return p
 }
 
-// generateCryptographicallySecureToken generates a secure random token
+// generateCryptographicallySecureToken generates a secure random token string
 func generateCryptographicallySecureToken() string {
-	// TODO: Implement secure token generation
-	// For now, return a placeholder
-	return "secure-reset-token-placeholder"
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback (should not happen normally)
+		return uuid.New().String()
+	}
+	return hex.EncodeToString(b)
 }
 
-// extractDomainFromEmail extracts domain from email address
-func extractDomainFromEmail(email string) string {
-	parts := strings.Split(email, "@")
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
-}
-
-// getOrCreateDefaultTenant gets or creates a default tenant
-func (s *userService) getOrCreateDefaultTenant(ctx context.Context) (*models.Tenant, error) {
-	// Try to find existing default tenant
-	defaultTenant, err := s.repo.Tenant().GetByDomain(ctx, "default.local")
-	if err == nil {
-		return defaultTenant, nil
-	}
-
-	// Create default tenant if it doesn't exist
-	defaultTenant = &models.Tenant{
-		Name:   "Default Organization",
-		Domain: "default.local",
-	}
-
-	if err := s.repo.Tenant().Create(ctx, defaultTenant); err != nil {
-		return nil, fmt.Errorf("failed to create default tenant: %w", err)
-	}
-
-	return defaultTenant, nil
-}
-
-// getStringValue safely gets string value from pointer
 func safeStringDereference(ptr *string) string {
 	if ptr == nil {
 		return ""
@@ -984,60 +1343,57 @@ func safeStringDereference(ptr *string) string {
 	return *ptr
 }
 
-// resolveTenantID resolves tenant ID from either UUID or domain
-func (s *userService) resolveTenantID(ctx context.Context, tenantID string) (string, error) {
-	if tenantID == "" {
-		return "", errors.New("tenant ID is required")
+func safeStringToPointer(s string) *string {
+	if strings.TrimSpace(s) == "" {
+		return nil
 	}
-
-	// Try to parse as UUID first
-	if _, err := uuid.Parse(tenantID); err == nil {
-		// It's a valid UUID, use it directly
-		return tenantID, nil
-	}
-
-	// Not a UUID, treat as domain
-	tenant, err := s.repo.Tenant().GetByDomain(ctx, tenantID)
-	if err != nil {
-		return "", fmt.Errorf("invalid tenant: %w", err)
-	}
-
-	return tenant.ID.String(), nil
+	return &s
 }
 
-// Account lockout constants
-const (
-	MaxFailedAttempts   = 5
-	LockoutDuration     = 15 * time.Minute
-	FailedAttemptWindow = 15 * time.Minute
-)
+// hashPasswordAsync hashes a password asynchronously
+type PasswordHashResult struct {
+	Hash  string
+	Error error
+}
 
-// isAccountLocked checks if an account is currently locked
+func (s *userService) hashPasswordAsync(pw string) <-chan PasswordHashResult {
+	ch := make(chan PasswordHashResult, 1)
+	go func() {
+		defer close(ch)
+		hash, err := s.passwordService.Hash(pw)
+		ch <- PasswordHashResult{Hash: hash, Error: err}
+	}()
+	return ch
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// ACCOUNT LOCKOUT (GLOBAL, EMAIL ONLY - prevents IP-based lockout abuse)
+// ───────────────────────────────────────────────────────────────────────────────
+
 func (s *userService) isAccountLocked(ctx context.Context, email, ipAddress string) bool {
 	if s.redisClient == nil {
-		// Fallback to database-based lockout
-		return s.isAccountLockedDB(ctx, email, ipAddress)
+		return s.isAccountLockedDB(ctx, email)
 	}
-
-	// Check Redis for lockout
-	lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
+	// Use email-only key to prevent attacker from locking out user with different IPs
+	lockKey := fmt.Sprintf("lockout:%s", email)
 	exists, err := s.redisClient.Exists(ctx, lockKey).Result()
 	return err == nil && exists > 0
 }
 
-// isAccountLockedDB checks account lockout using database
-func (s *userService) isAccountLockedDB(ctx context.Context, email, ipAddress string) bool {
+func (s *userService) isAccountLockedDB(ctx context.Context, email string) bool {
 	since := time.Now().Add(-FailedAttemptWindow)
-	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, since)
+	// Count all failed attempts for this email (regardless of IP)
+	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, "", "", since)
 	return err == nil && count >= MaxFailedAttempts
 }
 
-// recordFailedAttempt records a failed login attempt
-func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress string, userID *uuid.UUID) {
-	// Record in database
+func (s *userService) recordFailedAttempt(ctx context.Context, email string, ipAddress string, userID *uuid.UUID) {
+	// Normalize email for consistent storage and lookup
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+
 	attempt := &models.FailedLoginAttempt{
 		UserID:      userID,
-		Email:       email,
+		Email:       normalizedEmail,
 		IPAddress:   ipAddress,
 		UserAgent:   getUserAgent(ctx),
 		AttemptedAt: time.Now(),
@@ -1047,64 +1403,47 @@ func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress 
 		fmt.Printf("Failed to record failed attempt: %v\n", err)
 	}
 
-	// Check if we should lock the account
 	since := time.Now().Add(-FailedAttemptWindow)
-	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, since)
+	// Count by email only (not IP - prevents lockout abuse)
+	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, normalizedEmail, "", "", since)
 	if err == nil && count >= MaxFailedAttempts {
-		s.lockAccount(ctx, email, ipAddress)
+		s.lockAccount(ctx, normalizedEmail)
 	}
 }
 
-// lockAccount locks an account for a period of time
-func (s *userService) lockAccount(ctx context.Context, email, ipAddress string) {
+func (s *userService) lockAccount(ctx context.Context, email string) {
 	if s.redisClient == nil {
-		// No Redis, just log that account would be locked
-		fmt.Printf("Account locked for email %s from IP %s\n", email, ipAddress)
+		fmt.Printf("Account locked for email %s\n", email)
 		return
 	}
-
-	lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
+	// Use email-only key (prevents IP-based lockout abuse)
+	lockKey := fmt.Sprintf("lockout:%s", email)
 	if err := s.redisClient.Set(ctx, lockKey, "locked", LockoutDuration).Err(); err != nil {
 		fmt.Printf("Failed to set account lockout in Redis: %v\n", err)
 	}
 }
 
-// clearFailedAttempts clears failed attempts for successful login
 func (s *userService) clearFailedAttempts(ctx context.Context, email, ipAddress string) {
-	// Clear from database (cleanup will happen periodically)
-	// For now, just clear Redis if available
 	if s.redisClient != nil {
-		lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
-		s.redisClient.Del(ctx, lockKey)
+		lockKey := fmt.Sprintf("lockout:%s", email)
+		_ = s.redisClient.Del(ctx, lockKey)
 	}
 }
 
-// hashPasswordAsync hashes a password asynchronously for better performance
-func (s *userService) hashPasswordAsync(password string) <-chan PasswordHashResult {
-	resultChan := make(chan PasswordHashResult, 1)
+// ───────────────────────────────────────────────────────────────────────────────
+// CONTEXT HELPERS (IP & UA) – adjust based on your middleware
+// ───────────────────────────────────────────────────────────────────────────────
 
-	go func() {
-		defer close(resultChan)
-		hash, err := s.passwordService.Hash(password)
-		resultChan <- PasswordHashResult{
-			Hash:  hash,
-			Error: err,
-		}
-	}()
-
-	return resultChan
-}
-
-// PasswordHashResult holds the result of an asynchronous password hash operation
-type PasswordHashResult struct {
-	Hash  string
-	Error error
-}
-
-// safeStringToPointer converts a string to a pointer, returning nil for empty strings
-func safeStringToPointer(s string) *string {
-	if s == "" {
-		return nil
+func getClientIP(ctx context.Context) string {
+	if v, ok := ctx.Value("client_ip").(string); ok {
+		return v
 	}
-	return &s
+	return ""
+}
+
+func getUserAgent(ctx context.Context) string {
+	if v, ok := ctx.Value("user_agent").(string); ok {
+		return v
+	}
+	return ""
 }

@@ -34,6 +34,7 @@ func (r *organizationMembershipRepository) GetByID(ctx context.Context, id strin
 func (r *organizationMembershipRepository) GetByOrganizationAndUser(ctx context.Context, orgID, userID string) (*models.OrganizationMembership, error) {
 	var membership models.OrganizationMembership
 	err := r.db.WithContext(ctx).
+		Preload("Role").
 		Where("organization_id = ? AND user_id = ?", orgID, userID).
 		First(&membership).Error
 	return &membership, err

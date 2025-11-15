@@ -3,7 +3,6 @@ package validation
 import (
 	"errors"
 	"fmt"
-	"net/mail"
 	"regexp"
 	"strings"
 	"unicode"
@@ -19,17 +18,28 @@ var (
 	ErrPasswordNoLower    = errors.New("password must contain at least one lowercase letter")
 	ErrPasswordNoNumber   = errors.New("password must contain at least one number")
 	ErrPasswordNoSpecial  = errors.New("password must contain at least one special character")
-	ErrInvalidUserType    = errors.New("invalid user type")
-	ErrInvalidTenantID    = errors.New("invalid tenant ID")
+	ErrInvalidOrgRole     = errors.New("invalid organization role")
 	ErrPasswordsDontMatch = errors.New("passwords do not match")
 )
 
-// ValidateEmail validates email format
+// NormalizeEmail lowercases and trims email BEFORE validation
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// ValidateEmail validates email format (after normalization)
+// Supports + character for email filtering (e.g., user+tag@domain.com)
 func ValidateEmail(email string) error {
-	_, err := mail.ParseAddress(email)
-	if err != nil {
+	email = NormalizeEmail(email)
+
+	// Use regex that allows + character in local part
+	// RFC 5322 compliant pattern for email validation
+	emailRegex := regexp.MustCompile(`^[a-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+	if !emailRegex.MatchString(email) {
 		return ErrInvalidEmail
 	}
+
 	return nil
 }
 
@@ -69,50 +79,38 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// ValidateUserType validates user type
-func ValidateUserType(userType string) error {
-	validTypes := []string{
-		models.UserTypeAdmin,
-		models.UserTypeStudent,
-		models.UserTypeRTO,
-		models.UserTypeIssuer,
-		models.UserTypeValidator,
-		models.UserTypeBadger,
-		models.UserTypeNonPartner,
-		models.UserTypePartner,
-	}
-
-	userTypeLower := strings.ToLower(userType)
-	for _, validType := range validTypes {
-		if userTypeLower == strings.ToLower(validType) {
-			return nil
-		}
-	}
-
-	return ErrInvalidUserType
+// Fast organization role validation (O(1) lookup)
+var validOrgRoles = map[string]bool{
+	strings.ToLower(models.OrganizationRoleAdmin):   true,
+	strings.ToLower(models.OrganizationRoleIssuer):  true,
+	strings.ToLower(models.OrganizationRoleRTO):     true,
+	strings.ToLower(models.OrganizationRoleStudent): true,
 }
 
-// NormalizeUserType normalizes user type to proper case
-func NormalizeUserType(userType string) string {
-	validTypes := []string{
-		models.UserTypeAdmin,
-		models.UserTypeStudent,
-		models.UserTypeRTO,
-		models.UserTypeIssuer,
-		models.UserTypeValidator,
-		models.UserTypeBadger,
-		models.UserTypeNonPartner,
-		models.UserTypePartner,
+// ValidateOrganizationRole validates organization role
+func ValidateOrganizationRole(role string) error {
+	if validOrgRoles[strings.ToLower(role)] {
+		return nil
 	}
+	return ErrInvalidOrgRole
+}
 
-	userTypeLower := strings.ToLower(userType)
-	for _, validType := range validTypes {
-		if userTypeLower == strings.ToLower(validType) {
-			return validType
+// NormalizeOrganizationRole normalizes org role to proper case
+func NormalizeOrganizationRole(role string) string {
+	roleLower := strings.ToLower(role)
+
+	for _, v := range []string{
+		models.OrganizationRoleAdmin,
+		models.OrganizationRoleIssuer,
+		models.OrganizationRoleRTO,
+		models.OrganizationRoleStudent,
+	} {
+		if roleLower == strings.ToLower(v) {
+			return v
 		}
 	}
 
-	return userType // Return as-is if not found (shouldn't happen after validation)
+	return role
 }
 
 // ValidatePasswordsMatch checks if passwords match
@@ -123,16 +121,14 @@ func ValidatePasswordsMatch(password, confirmPassword string) error {
 	return nil
 }
 
-// ValidatePhone validates phone number format (basic validation)
+// ValidatePhone validates phone number (optional)
 func ValidatePhone(phone string) error {
 	if phone == "" {
-		return nil // Phone is optional
+		return nil
 	}
 
-	// Remove all non-digit characters for validation
 	phone = regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
 
-	// Check if it's a reasonable length (7-15 digits)
 	if len(phone) < 7 || len(phone) > 15 {
 		return errors.New("phone number must be between 7 and 15 digits")
 	}
@@ -140,7 +136,7 @@ func ValidatePhone(phone string) error {
 	return nil
 }
 
-// ValidateName validates name fields
+// ValidateName ensures name fields are valid
 func ValidateName(name string, fieldName string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("%s cannot be empty", fieldName)
@@ -150,7 +146,6 @@ func ValidateName(name string, fieldName string) error {
 		return fmt.Errorf("%s cannot be longer than 100 characters", fieldName)
 	}
 
-	// Check for valid characters (letters, spaces, hyphens, apostrophes)
 	validName := regexp.MustCompile(`^[a-zA-Z\s\-']+$`)
 	if !validName.MatchString(name) {
 		return fmt.Errorf("%s contains invalid characters", fieldName)
@@ -162,7 +157,7 @@ func ValidateName(name string, fieldName string) error {
 // ValidateAddress validates address field
 func ValidateAddress(address string) error {
 	if address == "" {
-		return nil // Address is optional
+		return nil
 	}
 
 	if len(address) > 500 {
@@ -172,29 +167,14 @@ func ValidateAddress(address string) error {
 	return nil
 }
 
-// ValidateTenantDomain validates tenant domain
-func ValidateTenantDomain(domain string) error {
-	if strings.TrimSpace(domain) == "" {
-		return errors.New("domain cannot be empty")
-	}
-
-	// Basic domain validation
-	domainRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
-	if !domainRegex.MatchString(domain) {
-		return errors.New("invalid domain format")
-	}
-
-	return nil
-}
-
-// ValidateTenantName validates tenant name
-func ValidateTenantName(name string) error {
+// ValidateOrganizationName ensures organization name is valid
+func ValidateOrganizationName(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return errors.New("tenant name cannot be empty")
+		return errors.New("organization name cannot be empty")
 	}
 
 	if len(name) > 100 {
-		return errors.New("tenant name cannot be longer than 100 characters")
+		return errors.New("organization name cannot be longer than 100 characters")
 	}
 
 	return nil
@@ -206,13 +186,12 @@ func IsValidSlug(slug string) bool {
 		return false
 	}
 
-	// Slug should be lowercase, contain only letters, numbers, and hyphens
 	slugRegex := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	return slugRegex.MatchString(slug)
 }
 
-// ValidateUserRegistration validates user registration data
-func ValidateUserRegistration(email, password, confirmPassword, userType, tenantID string) error {
+// ValidateUserRegistration validates global user registration data
+func ValidateUserRegistration(email, password, confirmPassword string) error {
 	if err := ValidateEmail(email); err != nil {
 		return err
 	}
@@ -225,22 +204,13 @@ func ValidateUserRegistration(email, password, confirmPassword, userType, tenant
 		return err
 	}
 
-	if err := ValidateUserType(userType); err != nil {
-		return err
-	}
-
-	// Tenant ID is now optional - will be auto-assigned if not provided
 	return nil
 }
 
-// ValidateLogin validates login data
-func ValidateLogin(email, tenantID string) error {
+// ValidateLogin validates global login data
+func ValidateLogin(email string) error {
 	if err := ValidateEmail(email); err != nil {
 		return err
-	}
-
-	if tenantID == "" {
-		return ErrInvalidTenantID
 	}
 
 	return nil
@@ -264,13 +234,9 @@ func ValidatePasswordReset(token, password, confirmPassword string) error {
 }
 
 // ValidateForgotPassword validates forgot password request
-func ValidateForgotPassword(email, tenantID string) error {
+func ValidateForgotPassword(email string) error {
 	if err := ValidateEmail(email); err != nil {
 		return err
-	}
-
-	if tenantID == "" {
-		return ErrInvalidTenantID
 	}
 
 	return nil

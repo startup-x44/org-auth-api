@@ -9,6 +9,7 @@ export interface User {
   tenant_id?: string
   is_active: boolean
   is_superadmin?: boolean
+  global_role?: string
   created_at: string
   updated_at: string
   last_login?: string
@@ -28,15 +29,15 @@ export interface Organization {
 
 // Organization membership
 export interface OrganizationMembership {
-  id: string
   organization_id: string
-  user_id: string
+  organization_name: string
+  organization_slug: string
   role: string
+  role_id?: string
+  role_name?: string
+  permissions?: string[]
   status: string
   joined_at?: string
-  created_at: string
-  updated_at: string
-  organization?: Organization
 }
 
 // API Response types
@@ -47,7 +48,29 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   user: User
+  organizations?: OrganizationMembership[]
+  token?: TokenPair
+}
+
+export interface SelectOrganizationRequest {
+  user_id: string
+  organization_id: string
+}
+
+export interface SelectOrganizationResponse {
   token: TokenPair
+  organization: Organization
+}
+
+export interface CreateOrganizationRequest {
+  user_id: string
+  name: string
+  slug: string
+}
+
+export interface CreateOrganizationResponse {
+  token: TokenPair
+  organization: Organization
 }
 
 export interface RegisterRequest {
@@ -61,7 +84,7 @@ export interface RegisterRequest {
 
 export interface RegisterResponse {
   user: User
-  token: TokenPair
+  token?: TokenPair
 }
 
 export interface TokenPair {
@@ -69,6 +92,7 @@ export interface TokenPair {
   refresh_token: string
   expires_in: number
   token_type: string
+  permissions?: string[]
 }
 
 export interface RefreshTokenRequest {
@@ -112,6 +136,13 @@ export interface AuthState {
   accessToken: string | null
   refreshToken: string | null
   tenantId: string | null
+  organizationId: string | null
+  organization: OrganizationMembership | null
+  organizations: OrganizationMembership[]
+  permissions: string[]
+  roleId: string | null
+  roleName: string | null
+  needsOrgSelection: boolean
   isAuthenticated: boolean
   isSuperadmin: boolean
   loading: boolean

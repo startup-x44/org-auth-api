@@ -51,7 +51,7 @@ func main() {
 	}
 	passwordService := password.NewService()
 	emailSvc := email.NewService(&cfg.Email)
-	authService := service.NewAuthService(repo, jwtService, passwordService)
+	authService := service.NewAuthService(repo, jwtService, passwordService, emailSvc)
 
 	// Set Redis and Email clients for user service
 	userSvc := authService.UserService()
@@ -177,12 +177,16 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		// Public auth routes
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/login", authHandler.Login)
+			auth.POST("/register", authHandler.RegisterGlobal)
+			auth.POST("/login", authHandler.LoginGlobal)
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.POST("/forgot-password", authHandler.ForgotPassword)
 			auth.POST("/reset-password", authHandler.ResetPassword)
 		}
+
+		// Organization selection (requires valid credentials from login)
+		auth.POST("/select-organization", authHandler.SelectOrganization)
+		auth.POST("/create-organization", authHandler.CreateOrganization)
 
 		// Protected user routes
 		user := v1.Group("/user")
@@ -192,6 +196,7 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			user.PUT("/profile", authHandler.UpdateProfile)
 			user.POST("/change-password", authHandler.ChangePassword)
 			user.POST("/logout", authHandler.Logout)
+			user.GET("/organizations", authHandler.GetMyOrganizations)
 		}
 
 		// Organization routes
@@ -214,11 +219,18 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 
 			// Organization invitations
 			org.GET("/:orgId/invitations", organizationMiddleware.OrgAdminRequired(), organizationHandler.GetOrganizationInvitations)
+			org.POST("/:orgId/invitations/:invitationId/resend", organizationMiddleware.OrgAdminRequired(), organizationHandler.ResendInvitation)
 			org.DELETE("/:orgId/invitations/:invitationId", organizationMiddleware.OrgAdminRequired(), organizationHandler.CancelInvitation)
 		}
 
-		// Invitation acceptance (public route)
-		v1.POST("/invitations/:token/accept", organizationHandler.AcceptInvitation)
+		// Invitation acceptance (requires authentication but NOT organization membership)
+		invitations := v1.Group("/invitations")
+		invitations.Use(authMiddleware.AuthRequired())
+		{
+			invitations.POST("/:token/accept", organizationHandler.AcceptInvitation)
+		}
+
+		// Public invitation details (no auth required)
 		v1.GET("/invitations/:token", organizationHandler.GetInvitationDetails)
 
 		// Protected admin routes (superadmin only)

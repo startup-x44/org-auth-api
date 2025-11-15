@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"auth-service/internal/models"
@@ -13,7 +14,6 @@ import (
 type repository struct {
 	db                *gorm.DB
 	userRepo          UserRepository
-	tenantRepo        TenantRepository
 	orgRepo           OrganizationRepository
 	orgMembershipRepo OrganizationMembershipRepository
 	orgInvitationRepo OrganizationInvitationRepository
@@ -21,6 +21,9 @@ type repository struct {
 	refreshRepo       RefreshTokenRepository
 	passwordRepo      PasswordResetRepository
 	failedAttemptRepo FailedLoginAttemptRepository
+	rolePermRepo      RolePermissionRepository
+	roleRepo          RoleRepository
+	permRepo          PermissionRepository
 }
 
 // NewRepository creates a new repository instance
@@ -28,7 +31,6 @@ func NewRepository(db *gorm.DB) Repository {
 	return &repository{
 		db:                db,
 		userRepo:          NewUserRepository(db),
-		tenantRepo:        NewTenantRepository(db),
 		orgRepo:           NewOrganizationRepository(db),
 		orgMembershipRepo: NewOrganizationMembershipRepository(db),
 		orgInvitationRepo: NewOrganizationInvitationRepository(db),
@@ -36,17 +38,15 @@ func NewRepository(db *gorm.DB) Repository {
 		refreshRepo:       NewRefreshTokenRepository(db),
 		passwordRepo:      NewPasswordResetRepository(db),
 		failedAttemptRepo: NewFailedLoginAttemptRepository(db),
+		rolePermRepo:      NewRolePermissionRepository(db),
+		roleRepo:          NewRoleRepository(db),
+		permRepo:          NewPermissionRepository(db),
 	}
 }
 
 // User returns the user repository
 func (r *repository) User() UserRepository {
 	return r.userRepo
-}
-
-// Tenant returns the tenant repository
-func (r *repository) Tenant() TenantRepository {
-	return r.tenantRepo
 }
 
 // Organization returns the organization repository
@@ -84,6 +84,68 @@ func (r *repository) FailedLoginAttempt() FailedLoginAttemptRepository {
 	return r.failedAttemptRepo
 }
 
+// RolePermission returns the role permission repository
+func (r *repository) RolePermission() RolePermissionRepository {
+	return r.rolePermRepo
+}
+
+// Role returns the role repository
+func (r *repository) Role() RoleRepository {
+	return r.roleRepo
+}
+
+// Permission returns the permission repository
+func (r *repository) Permission() PermissionRepository {
+	return r.permRepo
+}
+
+// CreateDefaultAdminRole creates the default admin role for an organization with all permissions
+func (r *repository) CreateDefaultAdminRole(ctx context.Context, orgID, createdBy string) (*models.Role, error) {
+	orgUUID, err := uuid.Parse(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid organization ID: %w", err)
+	}
+
+	createdByUUID, err := uuid.Parse(createdBy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	// Create admin role
+	adminRole := &models.Role{
+		OrganizationID: orgUUID,
+		Name:           models.RoleNameAdmin,
+		DisplayName:    "Administrator",
+		Description:    "Full access to all organization features",
+		IsSystem:       true,
+		CreatedBy:      createdByUUID,
+	}
+
+	if err := r.db.WithContext(ctx).Create(adminRole).Error; err != nil {
+		return nil, fmt.Errorf("failed to create admin role: %w", err)
+	}
+
+	// Get all permissions
+	var permissions []models.Permission
+	adminPermNames := models.DefaultAdminPermissions()
+	if err := r.db.WithContext(ctx).Where("name IN ?", adminPermNames).Find(&permissions).Error; err != nil {
+		return nil, fmt.Errorf("failed to get permissions: %w", err)
+	}
+
+	// Assign all permissions to admin role
+	for _, perm := range permissions {
+		rolePermission := &models.RolePermission{
+			RoleID:       adminRole.ID,
+			PermissionID: perm.ID,
+		}
+		if err := r.db.WithContext(ctx).Create(rolePermission).Error; err != nil {
+			return nil, fmt.Errorf("failed to assign permission %s to admin: %w", perm.Name, err)
+		}
+	}
+
+	return adminRole, nil
+}
+
 // BeginTransaction starts a new database transaction
 func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) {
 	tx := r.db.WithContext(ctx).Begin()
@@ -94,7 +156,6 @@ func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) 
 	return &transaction{
 		tx:                tx,
 		userRepo:          NewUserRepository(tx),
-		tenantRepo:        NewTenantRepository(tx),
 		orgRepo:           NewOrganizationRepository(tx),
 		orgMembershipRepo: NewOrganizationMembershipRepository(tx),
 		orgInvitationRepo: NewOrganizationInvitationRepository(tx),
@@ -102,6 +163,9 @@ func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) 
 		refreshRepo:       NewRefreshTokenRepository(tx),
 		passwordRepo:      NewPasswordResetRepository(tx),
 		failedAttemptRepo: NewFailedLoginAttemptRepository(tx),
+		rolePermRepo:      NewRolePermissionRepository(tx),
+		roleRepo:          NewRoleRepository(tx),
+		permRepo:          NewPermissionRepository(tx),
 	}, nil
 }
 
@@ -109,7 +173,6 @@ func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) 
 type transaction struct {
 	tx                *gorm.DB
 	userRepo          UserRepository
-	tenantRepo        TenantRepository
 	orgRepo           OrganizationRepository
 	orgMembershipRepo OrganizationMembershipRepository
 	orgInvitationRepo OrganizationInvitationRepository
@@ -117,6 +180,9 @@ type transaction struct {
 	refreshRepo       RefreshTokenRepository
 	passwordRepo      PasswordResetRepository
 	failedAttemptRepo FailedLoginAttemptRepository
+	rolePermRepo      RolePermissionRepository
+	roleRepo          RoleRepository
+	permRepo          PermissionRepository
 }
 
 // Commit commits the transaction
@@ -132,11 +198,6 @@ func (t *transaction) Rollback() error {
 // User returns the user repository for transaction
 func (t *transaction) User() UserRepository {
 	return t.userRepo
-}
-
-// Tenant returns the tenant repository for transaction
-func (t *transaction) Tenant() TenantRepository {
-	return t.tenantRepo
 }
 
 // Organization returns the organization repository for transaction
@@ -174,11 +235,25 @@ func (t *transaction) FailedLoginAttempt() FailedLoginAttemptRepository {
 	return t.failedAttemptRepo
 }
 
+// RolePermission returns the role permission repository for transaction
+func (t *transaction) RolePermission() RolePermissionRepository {
+	return t.rolePermRepo
+}
+
+// Role returns the role repository for transaction
+func (t *transaction) Role() RoleRepository {
+	return t.roleRepo
+}
+
+// Permission returns the permission repository for transaction
+func (t *transaction) Permission() PermissionRepository {
+	return t.permRepo
+}
+
 // Migrate runs database migrations
 func Migrate(db *gorm.DB) error {
 	// Auto migrate all models
 	if err := db.AutoMigrate(
-		&models.Tenant{},
 		&models.User{},
 		&models.Organization{},
 		&models.OrganizationMembership{},
@@ -187,8 +262,16 @@ func Migrate(db *gorm.DB) error {
 		&models.RefreshToken{},
 		&models.PasswordReset{},
 		&models.FailedLoginAttempt{},
+		&models.Permission{},     // Global system permissions
+		&models.Role{},           // Organization-specific roles
+		&models.RolePermission{}, // Role-Permission many-to-many
 	); err != nil {
 		return err
+	}
+
+	// Seed global system permissions
+	if err := seedGlobalPermissions(db); err != nil {
+		return fmt.Errorf("failed to seed permissions: %w", err)
 	}
 
 	// Create composite indexes
@@ -197,13 +280,8 @@ func Migrate(db *gorm.DB) error {
 
 // createIndexes creates additional indexes not covered by AutoMigrate
 func createIndexes(db *gorm.DB) error {
-	// Composite index for users(email, tenant_id) for faster tenant-specific email lookups
-	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email_tenant ON users(email, tenant_id)").Error; err != nil {
-		return fmt.Errorf("failed to create users email-tenant index: %w", err)
-	}
-
-	// Composite index for failed_login_attempts(email, ip_address, tenant_id, attempted_at) for account lockout queries
-	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_failed_attempts_lookup ON failed_login_attempts(email, ip_address, tenant_id, attempted_at DESC)").Error; err != nil {
+	// Composite index for failed_login_attempts(email, ip_address, attempted_at) for account lockout queries
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_failed_attempts_lookup ON failed_login_attempts(email, ip_address, attempted_at DESC)").Error; err != nil {
 		return fmt.Errorf("failed to create failed login attempts index: %w", err)
 	}
 
@@ -235,6 +313,27 @@ func createIndexes(db *gorm.DB) error {
 	// Index for organization_invitations(expires_at) for cleanup
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_org_invitations_expires ON organization_invitations(expires_at)").Error; err != nil {
 		return fmt.Errorf("failed to create organization invitations expires index: %w", err)
+	}
+
+	return nil
+}
+
+// seedGlobalPermissions seeds the global system permissions if they don't exist
+func seedGlobalPermissions(db *gorm.DB) error {
+	permissions := models.DefaultPermissions()
+
+	for _, perm := range permissions {
+		var existing models.Permission
+		err := db.Where("name = ?", perm.Name).First(&existing).Error
+
+		// If not found, create it
+		if err == gorm.ErrRecordNotFound {
+			if err := db.Create(&perm).Error; err != nil {
+				return fmt.Errorf("failed to create permission %s: %w", perm.Name, err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("failed to check permission: %w", err)
+		}
 	}
 
 	return nil

@@ -60,6 +60,20 @@ func (r *userSessionRepository) GetByUserID(ctx context.Context, userID string) 
 	return sessions, err
 }
 
+// GetByUserAndTenant retrieves sessions scoped to a specific tenant
+func (r *userSessionRepository) GetByUserAndTenant(ctx context.Context, userID, tenantID string) ([]*models.UserSession, error) {
+	if userID == "" || tenantID == "" {
+		return nil, errors.New("user ID and tenant ID are required")
+	}
+
+	var sessions []*models.UserSession
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND tenant_id = ?", userID, tenantID).
+		Order("created_at DESC").
+		Find(&sessions).Error
+	return sessions, err
+}
+
 // GetActiveByUserID retrieves active sessions for a user
 func (r *userSessionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*models.UserSession, error) {
 	if userID == "" {

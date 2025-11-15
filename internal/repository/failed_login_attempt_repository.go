@@ -26,24 +26,24 @@ func (r *failedLoginAttemptRepository) Create(ctx context.Context, attempt *mode
 	return r.db.WithContext(ctx).Create(attempt).Error
 }
 
-// GetByEmailAndIP gets failed login attempts by email and IP within a time window
-func (r *failedLoginAttemptRepository) GetByEmailAndIP(ctx context.Context, email, ipAddress string, since time.Time) ([]*models.FailedLoginAttempt, error) {
+// GetByEmailAndIP gets failed login attempts by email, tenant, and IP within a time window
+func (r *failedLoginAttemptRepository) GetByEmailAndIP(ctx context.Context, email, tenantID, ipAddress string, since time.Time) ([]*models.FailedLoginAttempt, error) {
 	var attempts []*models.FailedLoginAttempt
 	err := r.db.WithContext(ctx).
-		Where("email = ? AND ip_address = ? AND attempted_at >= ?",
-			email, ipAddress, since).
+		Where("email = ? AND tenant_id = ? AND ip_address = ? AND attempted_at >= ?",
+			email, tenantID, ipAddress, since).
 		Order("attempted_at DESC").
 		Find(&attempts).Error
 	return attempts, err
 }
 
-// CountByEmailAndIP counts failed login attempts by email and IP within a time window
-func (r *failedLoginAttemptRepository) CountByEmailAndIP(ctx context.Context, email, ipAddress string, since time.Time) (int64, error) {
+// CountByEmailAndIP counts failed login attempts by email, tenant, and IP within a time window
+func (r *failedLoginAttemptRepository) CountByEmailAndIP(ctx context.Context, email, tenantID, ipAddress string, since time.Time) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&models.FailedLoginAttempt{}).
-		Where("email = ? AND ip_address = ? AND attempted_at >= ?",
-			email, ipAddress, since).
+		Where("email = ? AND tenant_id = ? AND ip_address = ? AND attempted_at >= ?",
+			email, tenantID, ipAddress, since).
 		Count(&count).Error
 	return count, err
 }

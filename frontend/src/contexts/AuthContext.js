@@ -14,53 +14,54 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [tenantId, setTenantId] = useState(null);
+  const [organization, setOrganization] = useState(null);
+  const [organizations, setOrganizations] = useState([]);
+  const [needsOrgSelection, setNeedsOrgSelection] = useState(false);
 
-  // Helper function to get tenant-specific localStorage key
-  const getStorageKey = (key, tenantId) => {
-    return tenantId ? `${key}_${tenantId}` : key;
+  // Helper function to get organization-specific localStorage key
+  const getStorageKey = (key, orgId) => {
+    return orgId ? `${key}_${orgId}` : key;
   };
 
   useEffect(() => {
     // Check if user is logged in on app start
-    const storedTenantId = localStorage.getItem('tenant_id');
-    if (storedTenantId) {
-      const token = localStorage.getItem(getStorageKey('access_token', storedTenantId));
-      const storedUser = localStorage.getItem(getStorageKey('user', storedTenantId));
+    const storedOrgId = localStorage.getItem('organization_id');
+    if (storedOrgId) {
+      const token = localStorage.getItem(getStorageKey('access_token', storedOrgId));
+      const storedUser = localStorage.getItem(getStorageKey('user', storedOrgId));
+      const storedOrg = localStorage.getItem(getStorageKey('organization', storedOrgId));
 
-      if (token && storedUser) {
+      if (token && storedUser && storedOrg) {
         setUser(JSON.parse(storedUser));
-        setTenantId(storedTenantId);
+        setOrganization(JSON.parse(storedOrg));
       }
     }
 
     setLoading(false);
   }, []);
 
-  const login = async (email, password, tenantId) => {
+  const login = async (email, password) => {
     try {
       const response = await authAPI.login({
         email,
         password,
-        tenant_id: tenantId,
       });
 
-      const { user: userData, token } = response.data.data;
+      const { user: userData, organizations: userOrgs } = response.data.data;
 
-      // Use tenant-specific storage keys
-      const tokenKey = getStorageKey('access_token', tenantId);
-      const refreshKey = getStorageKey('refresh_token', tenantId);
-      const userKey = getStorageKey('user', tenantId);
-
-      localStorage.setItem(tokenKey, token.access_token);
-      localStorage.setItem(refreshKey, token.refresh_token);
-      localStorage.setItem(userKey, JSON.stringify(userData));
-      localStorage.setItem('tenant_id', tenantId); // Global tenant reference
-
+      // Store user info globally (not org-specific yet)
+      localStorage.setItem('user_global', JSON.stringify(userData));
       setUser(userData);
-      setTenantId(tenantId);
+      setOrganizations(userOrgs);
 
-      return { success: true };
+      // If user has organizations, they need to select one
+      if (userOrgs && userOrgs.length > 0) {
+        setNeedsOrgSelection(true);
+        return { success: true, needsOrgSelection: true, organizations: userOrgs };
+      }
+
+      // No organizations - user needs to create one
+      return { success: true, needsOrgSelection: false, organizations: [] };
     } catch (error) {
       return {
         success: false,
@@ -69,28 +70,90 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const register = async (userData) => {
+  const selectOrganization = async (organizationId) => {
     try {
-      const response = await authAPI.register({
-        ...userData,
-        tenant_id: userData.tenant_id,
+      const response = await authAPI.selectOrganization({
+        user_id: user.id,
+        organization_id: organizationId,
       });
-      const { user: newUser, token } = response.data.data;
 
-      // Use tenant-specific storage keys
-      const tokenKey = getStorageKey('access_token', newUser.tenant_id);
-      const refreshKey = getStorageKey('refresh_token', newUser.tenant_id);
-      const userKey = getStorageKey('user', newUser.tenant_id);
+      const { token, organization: orgData } = response.data.data;
+
+      // Use organization-specific storage keys
+      const tokenKey = getStorageKey('access_token', organizationId);
+      const refreshKey = getStorageKey('refresh_token', organizationId);
+      const userKey = getStorageKey('user', organizationId);
+      const orgKey = getStorageKey('organization', organizationId);
 
       localStorage.setItem(tokenKey, token.access_token);
       localStorage.setItem(refreshKey, token.refresh_token);
-      localStorage.setItem(userKey, JSON.stringify(newUser));
-      localStorage.setItem('tenant_id', newUser.tenant_id); // Global tenant reference
+      localStorage.setItem(userKey, JSON.stringify(user));
+      localStorage.setItem(orgKey, JSON.stringify(orgData));
+      localStorage.setItem('organization_id', organizationId); // Global org reference
 
-      setUser(newUser);
-      setTenantId(newUser.tenant_id);
+      setOrganization(orgData);
+      setNeedsOrgSelection(false);
 
       return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Organization selection failed',
+      };
+    }
+  };
+
+  const createOrganization = async (orgData) => {
+    try {
+      const response = await authAPI.createOrganization({
+        user_id: user.id,
+        ...orgData,
+      });
+
+      const { token, organization: newOrg } = response.data.data;
+
+      // Use organization-specific storage keys
+      const tokenKey = getStorageKey('access_token', newOrg.id);
+      const refreshKey = getStorageKey('refresh_token', newOrg.id);
+      const userKey = getStorageKey('user', newOrg.id);
+      const orgKey = getStorageKey('organization', newOrg.id);
+
+      localStorage.setItem(tokenKey, token.access_token);
+      localStorage.setItem(refreshKey, token.refresh_token);
+      localStorage.setItem(userKey, JSON.stringify(user));
+      localStorage.setItem(orgKey, JSON.stringify(newOrg));
+      localStorage.setItem('organization_id', newOrg.id); // Global org reference
+
+      setOrganization(newOrg);
+      setNeedsOrgSelection(false);
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Organization creation failed',
+      };
+    }
+  };
+
+  const register = async (userData) => {
+    try {
+      const response = await authAPI.register({
+        email: userData.email,
+        password: userData.password,
+        confirm_password: userData.confirmPassword,
+        first_name: userData.firstName,
+        last_name: userData.lastName,
+      });
+      
+      const { user: newUser } = response.data.data;
+
+      // Store user info globally
+      localStorage.setItem('user_global', JSON.stringify(newUser));
+      setUser(newUser);
+      setNeedsOrgSelection(false); // New users need to create an organization
+
+      return { success: true, needsOrgCreation: true };
     } catch (error) {
       return {
         success: false,
@@ -103,20 +166,24 @@ export const AuthProvider = ({ children }) => {
     try {
       await authAPI.logout({
         user_id: user?.id,
-        refresh_token: localStorage.getItem(getStorageKey('refresh_token', tenantId)),
+        refresh_token: localStorage.getItem(getStorageKey('refresh_token', organization?.id)),
       });
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      // Clear tenant-specific storage
-      if (tenantId) {
-        localStorage.removeItem(getStorageKey('access_token', tenantId));
-        localStorage.removeItem(getStorageKey('refresh_token', tenantId));
-        localStorage.removeItem(getStorageKey('user', tenantId));
+      // Clear organization-specific storage
+      if (organization?.id) {
+        localStorage.removeItem(getStorageKey('access_token', organization.id));
+        localStorage.removeItem(getStorageKey('refresh_token', organization.id));
+        localStorage.removeItem(getStorageKey('user', organization.id));
+        localStorage.removeItem(getStorageKey('organization', organization.id));
       }
-      localStorage.removeItem('tenant_id');
+      localStorage.removeItem('organization_id');
+      localStorage.removeItem('user_global');
       setUser(null);
-      setTenantId(null);
+      setOrganization(null);
+      setOrganizations([]);
+      setNeedsOrgSelection(false);
     }
   };
 
@@ -125,7 +192,7 @@ export const AuthProvider = ({ children }) => {
       const response = await authAPI.updateProfile(profileData);
       const updatedUser = response.data.data;
 
-      localStorage.setItem(getStorageKey('user', tenantId), JSON.stringify(updatedUser));
+      localStorage.setItem(getStorageKey('user', organization?.id), JSON.stringify(updatedUser));
       setUser(updatedUser);
 
       return { success: true };
@@ -149,24 +216,62 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const switchOrganization = async (organizationId) => {
+    // Clear current org storage
+    if (organization?.id) {
+      localStorage.removeItem(getStorageKey('access_token', organization.id));
+      localStorage.removeItem(getStorageKey('refresh_token', organization.id));
+      localStorage.removeItem(getStorageKey('user', organization.id));
+      localStorage.removeItem(getStorageKey('organization', organization.id));
+    }
+
+    // Select new organization
+    return await selectOrganization(organizationId);
+  };
+
+  const getMyOrganizations = async () => {
+    try {
+      const response = await authAPI.getMyOrganizations();
+      const orgs = response.data.data;
+      setOrganizations(orgs);
+      return { success: true, organizations: orgs };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Failed to fetch organizations',
+      };
+    }
+  };
+
   const isAdmin = () => {
-    return user?.user_type === 'admin';
+    return user?.global_role === 'admin' || user?.is_superadmin;
+  };
+
+  const isOrgAdmin = () => {
+    return organization?.role === 'admin' || organization?.role === 'owner';
   };
 
   const isAuthenticated = () => {
-    return !!user && !!tenantId && !!localStorage.getItem(getStorageKey('access_token', tenantId));
+    return !!user && !!organization && !!localStorage.getItem(getStorageKey('access_token', organization.id));
   };
 
   const value = {
     user,
-    tenantId,
+    organization,
+    organizations,
+    needsOrgSelection,
     loading,
     login,
     register,
     logout,
+    selectOrganization,
+    createOrganization,
+    switchOrganization,
+    getMyOrganizations,
     updateProfile,
     changePassword,
     isAdmin,
+    isOrgAdmin,
     isAuthenticated,
   };
 

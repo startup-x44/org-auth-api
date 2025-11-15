@@ -93,6 +93,22 @@ func (r *passwordResetRepository) Delete(ctx context.Context, token string) erro
 	return nil
 }
 
+// DeleteByID deletes a password reset by ID
+func (r *passwordResetRepository) DeleteByID(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("id is required")
+	}
+
+	result := r.db.WithContext(ctx).Delete(&models.PasswordReset{}, "id = ?", id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrPasswordResetNotFound
+	}
+	return nil
+}
+
 // DeleteExpired deletes expired password resets
 func (r *passwordResetRepository) DeleteExpired(ctx context.Context) error {
 	return r.db.WithContext(ctx).Delete(&models.PasswordReset{}, "expires_at <= ?", time.Now()).Error

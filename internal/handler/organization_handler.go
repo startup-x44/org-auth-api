@@ -296,6 +296,26 @@ func (h *OrganizationHandler) CancelInvitation(c *gin.Context) {
 	})
 }
 
+// ResendInvitation handles resending an organization invitation
+func (h *OrganizationHandler) ResendInvitation(c *gin.Context) {
+	invitationID := c.Param("invitationId")
+
+	invitation, err := h.authService.OrganizationService().ResendInvitation(c.Request.Context(), invitationID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Invitation resent successfully",
+		"data":    invitation,
+	})
+}
+
 // GetInvitationDetails handles getting invitation details by token
 func (h *OrganizationHandler) GetInvitationDetails(c *gin.Context) {
 	// For now, return not implemented

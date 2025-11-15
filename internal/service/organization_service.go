@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
+	"auth-service/pkg/email"
 	"auth-service/pkg/logger"
 	"auth-service/pkg/validation"
 
@@ -40,6 +43,7 @@ type OrganizationService interface {
 
 // CreateOrganizationRequest represents organization creation request
 type CreateOrganizationRequest struct {
+	UserID      string  `json:"user_id"`
 	Name        string  `json:"name"`
 	Slug        string  `json:"slug,omitempty"` // Auto-generated if not provided
 	Description *string `json:"description,omitempty"`
@@ -68,13 +72,13 @@ type UpdateOrganizationRequest struct {
 type InviteUserRequest struct {
 	OrganizationID string `json:"organization_id"`
 	Email          string `json:"email"`
-	Role           string `json:"role"`
+	RoleName       string `json:"role_name"` // Role name to lookup (e.g., "admin", "issuer", "student")
 }
 
 // UpdateMembershipRequest represents membership update request
 type UpdateMembershipRequest struct {
-	Role   string `json:"role,omitempty"`
-	Status string `json:"status,omitempty"`
+	RoleName string `json:"role_name,omitempty"` // Role name to update to
+	Status   string `json:"status,omitempty"`
 }
 
 // OrganizationMember represents organization member with profile
@@ -83,7 +87,8 @@ type OrganizationMember struct {
 	Email          string     `json:"email"`
 	FirstName      *string    `json:"first_name"`
 	LastName       *string    `json:"last_name"`
-	Role           string     `json:"role"`
+	RoleName       string     `json:"role_name"` // Role name for display
+	RoleID         string     `json:"role_id"`   // Role ID
 	Status         string     `json:"status"`
 	JoinedAt       *time.Time `json:"joined_at"`
 	LastActivityAt *time.Time `json:"last_activity_at"`
@@ -91,15 +96,17 @@ type OrganizationMember struct {
 
 // organizationService implements OrganizationService interface
 type organizationService struct {
-	repo        repository.Repository
-	auditLogger *logger.AuditLogger
+	repo         repository.Repository
+	auditLogger  *logger.AuditLogger
+	emailService email.Service
 }
 
 // NewOrganizationService creates a new organization service
-func NewOrganizationService(repo repository.Repository) OrganizationService {
+func NewOrganizationService(repo repository.Repository, emailService email.Service) OrganizationService {
 	return &organizationService{
-		repo:        repo,
-		auditLogger: logger.NewAuditLogger(),
+		repo:         repo,
+		auditLogger:  logger.NewAuditLogger(),
+		emailService: emailService,
 	}
 }
 
@@ -139,11 +146,17 @@ func (s *organizationService) CreateOrganization(ctx context.Context, req *Creat
 		return nil, fmt.Errorf("failed to create organization: %w", err)
 	}
 
-	// Add creator as admin member
+	// Create default admin role with all permissions
+	adminRole, err := s.repo.CreateDefaultAdminRole(ctx, org.ID.String(), userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create admin role: %w", err)
+	}
+
+	// Add creator as admin member with admin role
 	membership := &models.OrganizationMembership{
 		OrganizationID: org.ID,
 		UserID:         uuid.MustParse(userID),
-		Role:           models.OrganizationRoleAdmin,
+		RoleID:         adminRole.ID, // Use the created admin role ID
 		Status:         models.MembershipStatusActive,
 		JoinedAt:       &org.CreatedAt,
 	}
@@ -271,10 +284,24 @@ func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserReq
 		return nil, errors.New("user is already a member of this organization")
 	}
 
-	// Check for existing pending invitation
+	// Check for existing invitation (pending or cancelled)
 	existingInvitation, err := s.repo.OrganizationInvitation().GetByOrganizationAndEmail(ctx, req.OrganizationID, req.Email)
-	if err == nil && existingInvitation.Status == models.InvitationStatusPending {
-		return nil, errors.New("pending invitation already exists for this email")
+	if err == nil {
+		if existingInvitation.Status == models.InvitationStatusPending {
+			return nil, errors.New("pending invitation already exists for this email")
+		}
+		// If invitation was cancelled or expired, delete it so we can create a new one
+		if existingInvitation.Status == models.InvitationStatusCancelled || existingInvitation.Status == models.InvitationStatusExpired {
+			if err := s.repo.OrganizationInvitation().Delete(ctx, existingInvitation.ID.String()); err != nil {
+				return nil, fmt.Errorf("failed to delete old invitation: %w", err)
+			}
+		}
+	}
+
+	// Lookup role by name
+	role, err := s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID, req.RoleName)
+	if err != nil {
+		return nil, fmt.Errorf("role not found: %w", err)
 	}
 
 	// Generate invitation token
@@ -284,7 +311,7 @@ func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserReq
 		OrganizationID: uuid.MustParse(req.OrganizationID),
 		Email:          req.Email,
 		TokenHash:      hashToken(token),
-		Role:           req.Role,
+		RoleID:         role.ID,
 		InvitedBy:      uuid.MustParse(userID),
 		ExpiresAt:      time.Now().Add(7 * 24 * time.Hour), // 7 days
 	}
@@ -293,8 +320,43 @@ func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserReq
 		return nil, fmt.Errorf("failed to create invitation: %w", err)
 	}
 
-	// TODO: Send invitation email
-	s.auditLogger.LogOrganizationAction(userID, "invite_user", req.OrganizationID, "", "", true, nil, fmt.Sprintf("Invited %s as %s", req.Email, req.Role))
+	// Get organization and inviter details for email
+	org, err := s.repo.Organization().GetByID(ctx, req.OrganizationID)
+	if err != nil {
+		// Log error but don't fail invitation creation
+		fmt.Printf("Failed to get organization for email: %v\n", err)
+	} else {
+		inviter, err := s.repo.User().GetByID(ctx, userID)
+		if err != nil {
+			fmt.Printf("Failed to get inviter for email: %v\n", err)
+		} else {
+			// Build inviter name, handling nil pointers
+			var inviterName string
+			if inviter.Firstname != nil && inviter.Lastname != nil {
+				inviterName = fmt.Sprintf("%s %s", *inviter.Firstname, *inviter.Lastname)
+			} else if inviter.Firstname != nil {
+				inviterName = *inviter.Firstname
+			} else if inviter.Lastname != nil {
+				inviterName = *inviter.Lastname
+			} else {
+				inviterName = inviter.Email
+			}
+
+			// Trim whitespace
+			inviterName = strings.TrimSpace(inviterName)
+			if inviterName == "" {
+				inviterName = inviter.Email
+			}
+
+			// Send invitation email
+			if err := s.emailService.SendInvitationEmail(req.Email, inviterName, org.Name, token); err != nil {
+				// Log error but don't fail invitation
+				fmt.Printf("Failed to send invitation email: %v\n", err)
+			}
+		}
+	}
+
+	s.auditLogger.LogOrganizationAction(userID, "invite_user", req.OrganizationID, "", "", true, nil, fmt.Sprintf("Invited %s as %s", req.Email, req.RoleName))
 
 	return invitation, nil
 }
@@ -331,7 +393,7 @@ func (s *organizationService) AcceptInvitation(ctx context.Context, token string
 	membership := &models.OrganizationMembership{
 		OrganizationID: invitation.OrganizationID,
 		UserID:         uuid.MustParse(userID),
-		Role:           invitation.Role,
+		RoleID:         invitation.RoleID,
 		Status:         models.MembershipStatusActive,
 		InvitedBy:      &invitation.InvitedBy,
 		InvitedAt:      &invitation.CreatedAt,
@@ -380,8 +442,13 @@ func (s *organizationService) UpdateMembership(ctx context.Context, orgID, userI
 	}
 
 	// Update fields
-	if req.Role != "" {
-		membership.Role = req.Role
+	if req.RoleName != "" {
+		// Lookup role by name
+		role, err := s.repo.Role().GetByOrganizationAndName(ctx, orgID, req.RoleName)
+		if err != nil {
+			return nil, fmt.Errorf("role not found: %w", err)
+		}
+		membership.RoleID = role.ID
 	}
 	if req.Status != "" {
 		membership.Status = req.Status
@@ -428,12 +495,28 @@ func (s *organizationService) ListMembers(ctx context.Context, orgID string) ([]
 			continue // Skip if user not found
 		}
 
+		// Load role information
+		var roleName string
+		var roleID string
+		if membership.Role != nil {
+			roleName = membership.Role.Name
+			roleID = membership.Role.ID.String()
+		} else {
+			// If role not preloaded, fetch it
+			role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
+			if err == nil {
+				roleName = role.Name
+				roleID = role.ID.String()
+			}
+		}
+
 		members[i] = &OrganizationMember{
 			UserID:         user.ID.String(),
 			Email:          user.Email,
 			FirstName:      user.Firstname,
 			LastName:       user.Lastname,
-			Role:           membership.Role,
+			RoleName:       roleName,
+			RoleID:         roleID,
 			Status:         membership.Status,
 			JoinedAt:       membership.JoinedAt,
 			LastActivityAt: membership.LastActivityAt,
@@ -491,7 +574,43 @@ func (s *organizationService) ResendInvitation(ctx context.Context, invitationID
 		return nil, fmt.Errorf("failed to update invitation: %w", err)
 	}
 
-	// TODO: Send invitation email again
+	// Send invitation email again
+	if s.emailService != nil {
+		// Get organization and inviter details
+		org, err := s.repo.Organization().GetByID(ctx, invitation.OrganizationID.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get organization: %w", err)
+		}
+
+		inviter, err := s.repo.User().GetByID(ctx, invitation.InvitedBy.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get inviter: %w", err)
+		}
+
+		// Build inviter name
+		inviterName := "Someone"
+		if inviter.Firstname != nil && inviter.Lastname != nil {
+			firstName := strings.TrimSpace(*inviter.Firstname)
+			lastName := strings.TrimSpace(*inviter.Lastname)
+			if firstName != "" && lastName != "" {
+				inviterName = firstName + " " + lastName
+			}
+		}
+
+		// Generate new token for resend
+		token := generateSecureToken()
+		invitation.TokenHash = hashToken(token)
+		if err := s.repo.OrganizationInvitation().Update(ctx, invitation); err != nil {
+			return nil, fmt.Errorf("failed to update invitation token: %w", err)
+		}
+
+		// Send email
+		if err := s.emailService.SendInvitationEmail(invitation.Email, inviterName, org.Name, token); err != nil {
+			fmt.Printf("Failed to send invitation email: %v\n", err)
+			// Don't fail the resend if email fails
+		}
+	}
+
 	s.auditLogger.LogOrganizationAction(userID, "resend_invitation", invitation.OrganizationID.String(), "", "", true, nil, "Invitation resent")
 
 	return invitation, nil
@@ -534,24 +653,19 @@ func (s *organizationService) validateInviteUserRequest(req *InviteUserRequest) 
 		return errors.New("email is required")
 	}
 
-	if req.Role == "" {
-		req.Role = models.OrganizationRoleStudent // Default role
+	if req.RoleName == "" {
+		req.RoleName = "student" // Default role
 	}
 
-	validRoles := []string{
-		models.OrganizationRoleAdmin,
-		models.OrganizationRoleIssuer,
-		models.OrganizationRoleRTO,
-		models.OrganizationRoleStudent,
+	// Role validation will happen when looking up the role in the database
+	// No need to hardcode valid roles here since they're dynamic per organization
+
+	// Basic email validation
+	if !strings.Contains(req.Email, "@") {
+		return errors.New("invalid email format")
 	}
 
-	for _, role := range validRoles {
-		if req.Role == role {
-			return nil
-		}
-	}
-
-	return errors.New("invalid role")
+	return nil
 }
 
 func (s *organizationService) generateSlug(name string) string {
@@ -611,7 +725,13 @@ func (s *organizationService) checkAdminPermission(ctx context.Context, orgID, u
 		return errors.New("not a member of this organization")
 	}
 
-	if membership.Role != models.OrganizationRoleAdmin || membership.Status != models.MembershipStatusActive {
+	// Load role to check if admin
+	role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
+	if err != nil {
+		return errors.New("failed to load role")
+	}
+
+	if role.Name != models.RoleNameAdmin || membership.Status != models.MembershipStatusActive {
 		return errors.New("admin permission required")
 	}
 
@@ -620,6 +740,6 @@ func (s *organizationService) checkAdminPermission(ctx context.Context, orgID, u
 
 // TODO: Implement these utility functions
 func hashToken(token string) string {
-	// TODO: Implement secure token hashing
-	return token // Placeholder
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

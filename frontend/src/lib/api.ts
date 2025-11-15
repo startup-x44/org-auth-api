@@ -12,16 +12,27 @@ import {
   ForgotPasswordRequest,
   ResetPasswordRequest,
   Organization,
-  ApiSuccess
+  ApiSuccess,
+  SelectOrganizationRequest,
+  SelectOrganizationResponse,
+  CreateOrganizationRequest,
+  CreateOrganizationResponse,
+  OrganizationMembership
 } from './types'
 
 // Auth API functions
 export const authAPI = {
   login: (data: LoginRequest): Promise<LoginResponse> =>
-    api.post('/auth/login', data).then(res => res.data),
+    api.post('/auth/login-global', data).then(res => res.data),
 
   register: (data: RegisterRequest): Promise<RegisterResponse> =>
-    api.post('/auth/register', data).then(res => res.data),
+    api.post('/auth/register-global', data).then(res => res.data),
+
+  selectOrganization: (data: SelectOrganizationRequest): Promise<SelectOrganizationResponse> =>
+    api.post('/auth/select-organization', data).then(res => res.data),
+
+  createOrganization: (data: CreateOrganizationRequest): Promise<CreateOrganizationResponse> =>
+    api.post('/auth/create-organization', data).then(res => res.data),
 
   refreshToken: (data: RefreshTokenRequest): Promise<RefreshTokenResponse> =>
     api.post('/auth/refresh', data).then(res => res.data),
@@ -46,6 +57,9 @@ export const userAPI = {
 
   changePassword: (data: ChangePasswordRequest): Promise<ApiSuccess> =>
     api.post('/user/change-password', data).then(res => res.data),
+
+  getMyOrganizations: (): Promise<ApiSuccess<OrganizationMembership[]>> =>
+    api.get('/user/organizations').then(res => res.data),
 }
 
 // Organization API functions

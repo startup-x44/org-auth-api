@@ -2,11 +2,10 @@ package email
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"html/template"
-	"net/http"
-	"time"
+	"net/smtp"
+	"net/url"
 
 	"auth-service/internal/config"
 )
@@ -14,112 +13,75 @@ import (
 // Service defines the interface for email operations
 type Service interface {
 	SendPasswordResetEmail(toEmail, resetToken string) error
-}
-
-// SendGridPayload represents the payload for SendGrid API
-type SendGridPayload struct {
-	Personalizations []SendGridPersonalization `json:"personalizations"`
-	From             SendGridEmail             `json:"from"`
-	Subject          string                    `json:"subject"`
-	Content          []SendGridContent         `json:"content"`
-}
-
-type SendGridPersonalization struct {
-	To []SendGridEmail `json:"to"`
-}
-
-type SendGridEmail struct {
-	Email string `json:"email"`
-	Name  string `json:"name,omitempty"`
-}
-
-type SendGridContent struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	SendInvitationEmail(toEmail, inviterName, organizationName, invitationToken string) error
 }
 
 // service implements Service interface
 type service struct {
 	config *config.EmailConfig
-	client *http.Client
 }
 
 // NewService creates a new email service
 func NewService(cfg *config.EmailConfig) Service {
 	return &service{
 		config: cfg,
-		client: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 // SendPasswordResetEmail sends a password reset email
 func (s *service) SendPasswordResetEmail(toEmail, resetToken string) error {
-	switch s.config.Provider {
-	case "sendgrid":
-		return s.sendViaSendGrid(toEmail, resetToken)
-	default:
-		// For development, just log the email
-		fmt.Printf("Password reset email would be sent to %s with token %s\n", toEmail, resetToken)
+	if !s.config.Enabled {
+		fmt.Printf("[DEV MODE] Password reset email to %s with token %s\n", toEmail, resetToken)
 		return nil
 	}
-}
 
-// sendViaSendGrid sends email via SendGrid API
-func (s *service) sendViaSendGrid(toEmail, resetToken string) error {
-	if s.config.APIKey == "" {
-		return fmt.Errorf("SendGrid API key not configured")
-	}
-
-	resetURL := fmt.Sprintf("%s?token=%s", s.config.ResetURL, resetToken)
-
-	// Generate HTML email content
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.config.FrontendURL, resetToken)
+	subject := "Password Reset Request"
 	htmlContent, err := s.generateResetEmailHTML(resetURL)
 	if err != nil {
 		return fmt.Errorf("failed to generate email content: %w", err)
 	}
 
-	payload := SendGridPayload{
-		Personalizations: []SendGridPersonalization{
-			{
-				To: []SendGridEmail{
-					{Email: toEmail},
-				},
-			},
-		},
-		From: SendGridEmail{
-			Email: s.config.FromEmail,
-			Name:  s.config.FromName,
-		},
-		Subject: "Password Reset Request",
-		Content: []SendGridContent{
-			{
-				Type:  "text/html",
-				Value: htmlContent,
-			},
-		},
+	return s.sendEmail(toEmail, subject, htmlContent)
+}
+
+// SendInvitationEmail sends an organization invitation email
+func (s *service) SendInvitationEmail(toEmail, inviterName, organizationName, invitationToken string) error {
+	if !s.config.Enabled {
+		fmt.Printf("[DEV MODE] Invitation email to %s from %s for %s with token %s\n",
+			toEmail, inviterName, organizationName, invitationToken)
+		return nil
 	}
 
-	jsonPayload, err := json.Marshal(payload)
+	// URL-encode the email to handle special characters like +
+	encodedEmail := url.QueryEscape(toEmail)
+	invitationURL := fmt.Sprintf("%s/accept-invitation?token=%s&email=%s", s.config.FrontendURL, invitationToken, encodedEmail)
+	subject := fmt.Sprintf("You've been invited to join %s", organizationName)
+	htmlContent, err := s.generateInvitationEmailHTML(inviterName, organizationName, invitationURL)
 	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+		return fmt.Errorf("failed to generate email content: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", bytes.NewBuffer(jsonPayload))
+	return s.sendEmail(toEmail, subject, htmlContent)
+}
+
+// sendEmail sends an email via SMTP
+func (s *service) sendEmail(to, subject, htmlBody string) error {
+	auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
+
+	// Build email message
+	msg := fmt.Sprintf("From: %s <%s>\r\n"+
+		"To: %s\r\n"+
+		"Subject: %s\r\n"+
+		"MIME-Version: 1.0\r\n"+
+		"Content-Type: text/html; charset=UTF-8\r\n"+
+		"\r\n"+
+		"%s", s.config.FromName, s.config.FromEmail, to, subject, htmlBody)
+
+	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+	err := smtp.SendMail(addr, auth, s.config.FromEmail, []string{to}, []byte(msg))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+s.config.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("SendGrid API returned status %d", resp.StatusCode)
+		return fmt.Errorf("failed to send email: %w", err)
 	}
 
 	return nil
@@ -160,6 +122,73 @@ func (s *service) generateResetEmailHTML(resetURL string) (string, error) {
 	}{
 		ResetURL: resetURL,
 		FromName: s.config.FromName,
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateInvitationEmailHTML generates HTML content for invitation email
+func (s *service) generateInvitationEmailHTML(inviterName, organizationName, invitationURL string) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Organization Invitation</title>
+</head>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 20px; text-align: center; border-radius: 8px 8px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 28px;">You're Invited!</h1>
+    </div>
+    <div style="background: white; padding: 40px; border-radius: 0 0 8px 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <p style="font-size: 16px; color: #374151; line-height: 1.6;">Hi there,</p>
+        <p style="font-size: 16px; color: #374151; line-height: 1.6;">
+            <strong>{{.InviterName}}</strong> has invited you to join <strong>{{.OrganizationName}}</strong>.
+        </p>
+        <p style="font-size: 16px; color: #374151; line-height: 1.6;">
+            Click the button below to accept the invitation and get started:
+        </p>
+        <div style="text-align: center; margin: 40px 0;">
+            <a href="{{.InvitationURL}}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600; font-size: 16px;">Accept Invitation</a>
+        </div>
+        <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
+            If you didn't expect this invitation, you can safely ignore this email.
+        </p>
+        <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
+            This invitation will expire in 7 days.
+        </p>
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+        <p style="font-size: 12px; color: #9ca3af;">
+            If the button doesn't work, copy and paste this URL into your browser:
+        </p>
+        <p style="word-break: break-all; color: #667eea; font-size: 12px;">{{.InvitationURL}}</p>
+    </div>
+    <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
+        <p>This email was sent by {{.FromName}}</p>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("invitationEmail").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	data := struct {
+		InviterName      string
+		OrganizationName string
+		InvitationURL    string
+		FromName         string
+	}{
+		InviterName:      inviterName,
+		OrganizationName: organizationName,
+		InvitationURL:    invitationURL,
+		FromName:         s.config.FromName,
 	}
 
 	var buf bytes.Buffer

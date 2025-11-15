@@ -27,13 +27,13 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 	return &userRepository{db: db}
 }
 
-// Create creates a new user
+// Create creates a new global user (no organization required)
 func (r *userRepository) Create(ctx context.Context, user *models.User) error {
 	if user == nil {
 		return errors.New("user cannot be nil")
 	}
 
-	// Check if user with same email already exists (users are now global)
+	// Check if user with same email already exists globally
 	var existingUser models.User
 	result := r.db.WithContext(ctx).Where("email = ?", user.Email).First(&existingUser)
 	if result.Error == nil {
@@ -67,6 +67,20 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*models.
 
 	var user models.User
 	err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrUserNotFound
+	}
+	return &user, err
+}
+
+// GetByEmailAndTenant retrieves a user by email scoped to a tenant
+func (r *userRepository) GetByEmailAndTenant(ctx context.Context, email, tenantID string) (*models.User, error) {
+	if email == "" || tenantID == "" {
+		return nil, errors.New("email and tenant ID are required")
+	}
+
+	var user models.User
+	err := r.db.WithContext(ctx).Where("email = ? AND tenant_id = ?", email, tenantID).First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrUserNotFound
 	}
@@ -155,7 +169,7 @@ func (r *userRepository) UpdatePassword(ctx context.Context, id, hashedPassword 
 		return errors.New("user ID and password are required")
 	}
 
-	result := r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", id).Update("password", hashedPassword)
+	result := r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", id).Update("password_hash", hashedPassword)
 	if result.Error != nil {
 		return result.Error
 	}

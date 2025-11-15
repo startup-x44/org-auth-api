@@ -1,16 +1,20 @@
 -- +migrate Up
 -- Convert from tenant-based to organization-based system
 
--- Step 1: Make tenant_id nullable in users table (for backward compatibility during migration)
+-- Step 1: Clean up old sessions (they'll need to re-login with organization selection)
+TRUNCATE TABLE user_sessions CASCADE;
+TRUNCATE TABLE refresh_tokens CASCADE;
+
+-- Step 2: Make tenant_id nullable in users table (for backward compatibility during migration)
 ALTER TABLE users ALTER COLUMN tenant_id DROP NOT NULL;
 
--- Step 2: Add new columns to users table for organization system
+-- Step 3: Add new columns to users table for organization system
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS global_role VARCHAR(50) DEFAULT 'user';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS legacy_tenant_id UUID;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS legacy_user_type VARCHAR(50);
 
--- Step 3: Create organizations table
+-- Step 4: Create organizations table
 CREATE TABLE IF NOT EXISTS organizations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(100) NOT NULL,
@@ -23,7 +27,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Step 4: Create organization_memberships table
+-- Step 5: Create organization_memberships table
 CREATE TABLE IF NOT EXISTS organization_memberships (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -39,7 +43,7 @@ CREATE TABLE IF NOT EXISTS organization_memberships (
     UNIQUE(organization_id, user_id)
 );
 
--- Step 5: Create organization_invitations table
+-- Step 6: Create organization_invitations table
 CREATE TABLE IF NOT EXISTS organization_invitations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -54,7 +58,7 @@ CREATE TABLE IF NOT EXISTS organization_invitations (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Step 6: Create indexes for performance
+-- Step 7: Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_is_superadmin ON users(is_superadmin);
@@ -72,10 +76,10 @@ CREATE INDEX IF NOT EXISTS idx_invitation_token ON organization_invitations(toke
 CREATE INDEX IF NOT EXISTS idx_invitation_status ON organization_invitations(status);
 CREATE INDEX IF NOT EXISTS idx_invitation_expires ON organization_invitations(expires_at);
 
--- Step 7: Update existing user records to have is_superadmin = true for Admin user_type
+-- Step 8: Update existing user records to have is_superadmin = true for Admin user_type
 UPDATE users SET is_superadmin = true WHERE tenant_id IS NOT NULL AND tenant_id::text != '';
 
--- Step 8: Create updated_at triggers
+-- Step 9: Create updated_at triggers
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN

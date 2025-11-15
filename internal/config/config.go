@@ -63,11 +63,14 @@ type RateLimitConfig struct {
 }
 
 type EmailConfig struct {
-	Provider  string
-	APIKey    string
-	FromEmail string
-	FromName  string
-	ResetURL  string
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	FromEmail   string
+	FromName    string
+	Enabled     bool
+	FrontendURL string
 }
 
 func Load() *Config {
@@ -113,11 +116,14 @@ func Load() *Config {
 			MaxSessions:   getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),   // 5 per user
 		},
 		Email: EmailConfig{
-			Provider:  getEnv("EMAIL_PROVIDER", "sendgrid"),
-			APIKey:    getEnv("EMAIL_API_KEY", ""),
-			FromEmail: getEnv("EMAIL_FROM_EMAIL", "noreply@example.com"),
-			FromName:  getEnv("EMAIL_FROM_NAME", "Auth Service"),
-			ResetURL:  getEnv("PASSWORD_RESET_URL", "https://app.example.com/reset-password"),
+			Host:        getEnv("SMTP_HOST", "sandbox.smtp.mailtrap.io"),
+			Port:        getEnvAsInt("SMTP_PORT", 587),
+			Username:    getEnv("SMTP_USERNAME", ""),
+			Password:    getEnv("SMTP_PASSWORD", ""),
+			FromEmail:   getEnv("SMTP_FROM_EMAIL", "noreply@example.com"),
+			FromName:    getEnv("SMTP_FROM_NAME", "Auth Service"),
+			Enabled:     getEnv("EMAIL_ENABLED", "true") == "true",
+			FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 		},
 		Environment: getEnv("ENVIRONMENT", "development"),
 	}
@@ -190,15 +196,15 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Validate email configuration in production
-	if cfg.Environment == "production" {
-		if cfg.Email.APIKey == "" {
-			return errors.New("EMAIL_API_KEY must be set in production")
+	if cfg.Environment == "production" && cfg.Email.Enabled {
+		if cfg.Email.Username == "" || cfg.Email.Password == "" {
+			return errors.New("SMTP credentials must be set when email is enabled in production")
 		}
 		if cfg.Email.FromEmail == "" {
-			return errors.New("EMAIL_FROM_EMAIL must be set in production")
+			return errors.New("SMTP_FROM_EMAIL must be set in production")
 		}
-		if cfg.Email.ResetURL == "" {
-			return errors.New("PASSWORD_RESET_URL must be set in production")
+		if cfg.Email.FrontendURL == "" {
+			return errors.New("FRONTEND_URL must be set in production")
 		}
 	}
 

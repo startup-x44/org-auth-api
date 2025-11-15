@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
 	"auth-service/pkg/logger"
+
+	"github.com/google/uuid"
 )
 
 // SessionService defines the interface for advanced session management
@@ -33,12 +34,12 @@ type SessionService interface {
 
 // SessionConfig holds configuration for session management
 type SessionConfig struct {
-	MaxSessionsPerUser    int           `json:"max_sessions_per_user"`
-	SessionTimeout        time.Duration `json:"session_timeout"`
-	MaxInactiveTime       time.Duration `json:"max_inactive_time"`
-	EnableGeoTracking    bool          `json:"enable_geo_tracking"`
-	EnableDeviceTracking bool          `json:"enable_device_tracking"`
-	SuspiciousActivityThreshold int     `json:"suspicious_activity_threshold"`
+	MaxSessionsPerUser          int           `json:"max_sessions_per_user"`
+	SessionTimeout              time.Duration `json:"session_timeout"`
+	MaxInactiveTime             time.Duration `json:"max_inactive_time"`
+	EnableGeoTracking           bool          `json:"enable_geo_tracking"`
+	EnableDeviceTracking        bool          `json:"enable_device_tracking"`
+	SuspiciousActivityThreshold int           `json:"suspicious_activity_threshold"`
 }
 
 // sessionService implements SessionService interface
@@ -62,6 +63,11 @@ func (s *sessionService) CreateSession(ctx context.Context, userID, tenantID str
 	// Generate session token
 	sessionToken := generateSecureToken()
 
+	// Handle empty IP address - use a placeholder for inet type
+	if ipAddress == "" {
+		ipAddress = "0.0.0.0" // Placeholder for unknown/missing IP
+	}
+
 	// Create device fingerprint
 	deviceFingerprint := s.generateDeviceFingerprint(ipAddress, userAgent)
 
@@ -72,16 +78,16 @@ func (s *sessionService) CreateSession(ctx context.Context, userID, tenantID str
 	}
 
 	session := &models.UserSession{
-		UserID:             uuid.MustParse(userID),
-		TenantID:           uuid.MustParse(tenantID),
-		TokenHash:          sessionToken,
-		IPAddress:          ipAddress,
-		UserAgent:          userAgent,
-		DeviceFingerprint:  deviceFingerprint,
-		Location:           location,
-		IsActive:           true,
-		LastActivity:       time.Now(),
-		ExpiresAt:          time.Now().Add(s.config.SessionTimeout),
+		UserID:            uuid.MustParse(userID),
+		OrganizationID:    uuid.MustParse(tenantID), // Parameter name is legacy but maps to OrganizationID
+		TokenHash:         sessionToken,
+		IPAddress:         ipAddress,
+		UserAgent:         userAgent,
+		DeviceFingerprint: deviceFingerprint,
+		Location:          location,
+		IsActive:          true,
+		LastActivity:      time.Now(),
+		ExpiresAt:         time.Now().Add(s.config.SessionTimeout),
 	}
 
 	if err := s.repo.UserSession().Create(ctx, session); err != nil {

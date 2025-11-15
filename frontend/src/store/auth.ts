@@ -2,11 +2,16 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { authAPI, userAPI } from '../lib/api'
 import { AuthState, User, RegisterRequest, UpdateProfileRequest, ChangePasswordRequest } from '../lib/types'
+import { decodeJWT, extractPermissions, isTokenExpired } from '../lib/jwt'
 
 interface AuthStore extends AuthState {
   // Actions
-  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>
-  register: (data: RegisterRequest) => Promise<{ success: boolean; message?: string }>
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string; needsOrgSelection?: boolean; organizations?: any[] }>
+  selectOrganization: (organizationId: string) => Promise<{ success: boolean; message?: string }>
+  createOrganization: (name: string, slug: string) => Promise<{ success: boolean; message?: string }>
+  switchOrganization: (organizationId: string) => Promise<{ success: boolean; message?: string }>
+  getMyOrganizations: () => Promise<{ success: boolean; organizations?: any[] }>
+  register: (data: RegisterRequest) => Promise<{ success: boolean; message?: string; needsOrgCreation?: boolean }>
   logout: () => Promise<void>
   performTokenRefresh: () => Promise<{ success: boolean }>
   updateProfile: (data: UpdateProfileRequest) => Promise<{ success: boolean; message?: string }>
@@ -15,7 +20,10 @@ interface AuthStore extends AuthState {
   resetPassword: (token: string, password: string, confirmPassword: string) => Promise<{ success: boolean; message?: string }>
   initialize: () => void
   clearError: () => void
-  setTenantId: (tenantId: string | null) => void
+  setOrganizationId: (organizationId: string | null) => void
+  hasPermission: (permission: string) => boolean
+  hasAnyPermission: (...permissions: string[]) => boolean
+  hasAllPermissions: (...permissions: string[]) => boolean
 }
 
 const useAuthStore = create<AuthStore>()(
@@ -26,6 +34,13 @@ const useAuthStore = create<AuthStore>()(
       accessToken: null,
       refreshToken: null,
       tenantId: null,
+      organizationId: null,
+      organization: null,
+      organizations: [],
+      permissions: [],
+      roleId: null,
+      roleName: null,
+      needsOrgSelection: false,
       isAuthenticated: false,
       isSuperadmin: false,
       loading: true,
@@ -35,15 +50,14 @@ const useAuthStore = create<AuthStore>()(
       setUser: (user: User | null) => set({
         user,
         isSuperadmin: user?.is_superadmin || false,
-        tenantId: user?.tenant_id || get().tenantId
       }),
 
-      setTenantId: (tenantId: string | null) => {
-        set({ tenantId })
-        if (tenantId) {
-          localStorage.setItem('tenant_id', tenantId)
+      setOrganizationId: (organizationId: string | null) => {
+        set({ organizationId })
+        if (organizationId) {
+          localStorage.setItem('organization_id', organizationId)
         } else {
-          localStorage.removeItem('tenant_id')
+          localStorage.removeItem('organization_id')
         }
       },
 
@@ -51,24 +65,222 @@ const useAuthStore = create<AuthStore>()(
         try {
           set({ loading: true, error: null })
           const response = await authAPI.login({ email, password })
-          const { user, token } = response
+          
+          console.log('Login API response (full):', response) // Debug log
+          
+          // Backend returns { data: { user, organizations }, success, message }
+          // The API wrapper does .then(res => res.data), so we get the outer wrapper
+          // We need to extract from response.data
+          const user = (response as any).data?.user || response.user
+          const organizations = (response as any).data?.organizations || response.organizations
+          
+          console.log('Extracted user:', user) // Debug log
+          console.log('Extracted organizations:', organizations) // Debug log
+
+          if (!user) {
+            console.error('No user in response! Response structure:', response)
+            throw new Error('Invalid login response - no user data')
+          }
+
+          // Store user globally
+          console.log('Storing user in localStorage:', user)
+          localStorage.setItem('user_global', JSON.stringify(user))
+          
+          set({
+            user,
+            organizations: organizations || [],
+            loading: false,
+            error: null,
+          })
+
+          console.log('User stored in Zustand state:', user)
+          console.log('Organizations after login:', organizations) // Debug log
+
+          // Check if user has organizations
+          if (organizations && organizations.length > 0) {
+            set({ needsOrgSelection: true })
+            return { success: true, needsOrgSelection: true, organizations }
+          }
+
+          // No organizations - user needs to create one
+          return { success: true, needsOrgSelection: false, organizations: [] }
+        } catch (error: any) {
+          console.error('Login error:', error) // Debug log
+          const errorMessage = error.response?.data?.message || error.message || 'Login failed'
+          set({ loading: false, error: errorMessage })
+          return { success: false, message: errorMessage }
+        }
+      },
+
+      selectOrganization: async (organizationId: string) => {
+        try {
+          set({ loading: true, error: null })
+          const { user } = get()
+          
+          if (!user?.id) {
+            throw new Error('User not authenticated')
+          }
+          
+          const response = await authAPI.selectOrganization({
+            user_id: user.id,
+            organization_id: organizationId
+          })
+          
+          console.log('Select organization response:', response)
+          
+          // Backend might return { data: { token, organization } } or { token, organization }
+          const responseData: any = response
+          const { token, organization } = responseData.data || responseData
+
+          if (!token || !organization) {
+            throw new Error('Invalid response from server')
+          }
+
+          // Decode JWT to extract permissions
+          const claims = decodeJWT(token.access_token)
+          const permissions = claims?.permissions || []
+          const roleId = organization.role_id || null
+          const roleName = organization.role_name || organization.role || null
+
+          // Store with org-specific keys
+          localStorage.setItem(`access_token_${organizationId}`, token.access_token)
+          localStorage.setItem(`refresh_token_${organizationId}`, token.refresh_token)
+          localStorage.setItem(`user_${organizationId}`, JSON.stringify(user))
+          localStorage.setItem(`organization_${organizationId}`, JSON.stringify(organization))
+          localStorage.setItem('organization_id', organizationId)
+
+          set({
+            accessToken: token.access_token,
+            refreshToken: token.refresh_token,
+            organizationId,
+            organization,
+            permissions,
+            roleId,
+            roleName,
+            isAuthenticated: true,
+            needsOrgSelection: false,
+            loading: false,
+          })
+
+          return { success: true }
+        } catch (error: any) {
+          console.error('Select organization error:', error)
+          const errorMessage = error.response?.data?.message || error.message || 'Organization selection failed'
+          set({ loading: false, error: errorMessage })
+          return { success: false, message: errorMessage }
+        }
+      },
+
+      createOrganization: async (name: string, slug: string) => {
+        try {
+          set({ loading: true, error: null })
+          let { user } = get()
+          
+          console.log('CreateOrganization called with:', { name, slug })
+          console.log('User from state:', user)
+          
+          // If no user in state, try to get from localStorage
+          if (!user) {
+            const userGlobal = localStorage.getItem('user_global')
+            console.log('user_global from localStorage (raw):', userGlobal)
+            if (userGlobal) {
+              user = JSON.parse(userGlobal)
+              console.log('Retrieved user from localStorage:', user)
+            }
+          }
+          
+          if (!user?.id) {
+            console.error('User not authenticated! User object:', user)
+            throw new Error('User not authenticated')
+          }
+          
+          const payload = {
+            user_id: user.id,
+            name,
+            slug
+          }
+          
+          console.log('Creating organization with payload:', payload)
+          
+          const response = await authAPI.createOrganization(payload)
+          
+          console.log('Create organization response:', response)
+          
+          // Backend might return { data: { token, organization } } or { token, organization }
+          const responseData: any = response
+          const { token, organization } = responseData.data || responseData
+
+          if (!token || !organization) {
+            throw new Error('Invalid response from server')
+          }
+
+          // Decode JWT to extract permissions
+          const claims = decodeJWT(token.access_token)
+          const permissions = claims?.permissions || []
+          const roleId = organization.role_id || null
+          const roleName = organization.role_name || organization.role || null
+
+          // Store with org-specific keys
+          localStorage.setItem(`access_token_${organization.id}`, token.access_token)
+          localStorage.setItem(`refresh_token_${organization.id}`, token.refresh_token)
+          localStorage.setItem(`user_${organization.id}`, JSON.stringify(user))
+          localStorage.setItem(`organization_${organization.id}`, JSON.stringify(organization))
+          localStorage.setItem('organization_id', organization.id)
 
           set({
             user,
             accessToken: token.access_token,
             refreshToken: token.refresh_token,
-            tenantId: user.tenant_id || get().tenantId,
+            organizationId: organization.id,
+            organization,
+            permissions,
+            roleId,
+            roleName,
             isAuthenticated: true,
-            isSuperadmin: user.is_superadmin || false,
+            needsOrgSelection: false,
             loading: false,
-            error: null,
           })
 
           return { success: true }
         } catch (error: any) {
-          const errorMessage = error.response?.data?.message || error.message || 'Login failed'
+          console.error('Organization creation error:', error)
+          const errorMessage = error.response?.data?.message || error.message || 'Organization creation failed'
           set({ loading: false, error: errorMessage })
           return { success: false, message: errorMessage }
+        }
+      },
+
+      switchOrganization: async (organizationId: string) => {
+        // Clear current org storage
+        const { organizationId: currentOrgId } = get()
+        if (currentOrgId) {
+          localStorage.removeItem(`access_token_${currentOrgId}`)
+          localStorage.removeItem(`refresh_token_${currentOrgId}`)
+          localStorage.removeItem(`user_${currentOrgId}`)
+          localStorage.removeItem(`organization_${currentOrgId}`)
+        }
+
+        // Select new organization
+        return get().selectOrganization(organizationId)
+      },
+
+      getMyOrganizations: async () => {
+        try {
+          set({ loading: true, error: null })
+          const response = await userAPI.getMyOrganizations()
+          const organizations = response.data || []
+
+          set({
+            organizations,
+            loading: false,
+            error: null,
+          })
+
+          return { success: true, organizations }
+        } catch (error: any) {
+          const errorMessage = error.response?.data?.message || error.message || 'Failed to fetch organizations'
+          set({ loading: false, error: errorMessage })
+          return { success: false, message: errorMessage, organizations: [] }
         }
       },
 
@@ -76,20 +288,19 @@ const useAuthStore = create<AuthStore>()(
         try {
           set({ loading: true, error: null })
           const response = await authAPI.register(data)
-          const { user, token } = response
+          const { user } = response
+
+          // Store user globally
+          localStorage.setItem('user_global', JSON.stringify(user))
 
           set({
             user,
-            accessToken: token.access_token,
-            refreshToken: token.refresh_token,
-            tenantId: user.tenant_id || get().tenantId,
-            isAuthenticated: true,
-            isSuperadmin: user.is_superadmin || false,
             loading: false,
             error: null,
           })
 
-          return { success: true }
+          // New users need to create an organization
+          return { success: true, needsOrgCreation: true }
         } catch (error: any) {
           const errorMessage = error.response?.data?.message || error.message || 'Registration failed'
           set({ loading: false, error: errorMessage })
@@ -103,20 +314,40 @@ const useAuthStore = create<AuthStore>()(
         } catch (error) {
           console.error('Logout error:', error)
         } finally {
+          const { organizationId } = get()
+          
+          // Clear org-specific storage
+          if (organizationId) {
+            localStorage.removeItem(`access_token_${organizationId}`)
+            localStorage.removeItem(`refresh_token_${organizationId}`)
+            localStorage.removeItem(`user_${organizationId}`)
+            localStorage.removeItem(`organization_${organizationId}`)
+          }
+          
+          // Clear global storage
+          localStorage.removeItem('organization_id')
+          localStorage.removeItem('user_global')
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('refresh_token')
+          localStorage.removeItem('user')
+          localStorage.removeItem('tenant_id')
+          
           set({
             user: null,
             accessToken: null,
             refreshToken: null,
             tenantId: null,
+            organizationId: null,
+            organization: null,
+            organizations: [],
+            permissions: [],
+            roleId: null,
+            roleName: null,
+            needsOrgSelection: false,
             isAuthenticated: false,
             isSuperadmin: false,
             error: null,
           })
-          // Clear localStorage
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
-          localStorage.removeItem('user')
-          localStorage.removeItem('tenant_id')
         }
       },
 
@@ -216,6 +447,25 @@ const useAuthStore = create<AuthStore>()(
 
       // Clear error
       clearError: () => set({ error: null }),
+
+      // Permission checks
+      hasPermission: (permission: string) => {
+        const { permissions, isSuperadmin } = get()
+        if (isSuperadmin) return true
+        return permissions.includes(permission)
+      },
+
+      hasAnyPermission: (...requiredPermissions: string[]) => {
+        const { permissions, isSuperadmin } = get()
+        if (isSuperadmin) return true
+        return requiredPermissions.some(p => permissions.includes(p))
+      },
+
+      hasAllPermissions: (...requiredPermissions: string[]) => {
+        const { permissions, isSuperadmin } = get()
+        if (isSuperadmin) return true
+        return requiredPermissions.every(p => permissions.includes(p))
+      },
     }),
     {
       name: 'auth-storage',
@@ -225,6 +475,13 @@ const useAuthStore = create<AuthStore>()(
         accessToken: state.accessToken,
         refreshToken: state.refreshToken,
         tenantId: state.tenantId,
+        organizationId: state.organizationId,
+        organization: state.organization,
+        organizations: state.organizations,
+        permissions: state.permissions,
+        roleId: state.roleId,
+        roleName: state.roleName,
+        needsOrgSelection: state.needsOrgSelection,
         isAuthenticated: state.isAuthenticated,
         isSuperadmin: state.isSuperadmin,
       }),

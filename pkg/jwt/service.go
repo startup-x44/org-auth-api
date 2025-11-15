@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"auth-service/internal/config"
-	"auth-service/internal/models"
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
@@ -16,29 +15,50 @@ import (
 
 // JWTService defines the interface for JWT operations
 type JWTService interface {
-	GenerateAccessToken(user *models.User) (string, error)
-	GenerateRefreshToken(user *models.User) (string, error)
+	GenerateAccessToken(ctx *TokenContext) (string, error)
+	GenerateRefreshToken(ctx *TokenContext) (string, string, error)
+	ValidateToken(tokenString string) (*Claims, error)
+	ParseAccessToken(tokenString string) (*Claims, error)
+	ParseRefreshToken(tokenString string) (*Claims, error)
 }
 
-// Claims represents the JWT claims
+// TokenContext carries metadata for org-scoped token generation (Slack style)
+type TokenContext struct {
+	UserID           uuid.UUID
+	OrganizationID   uuid.UUID
+	SessionID        uuid.UUID
+	RoleID           uuid.UUID
+	Email            string
+	GlobalRole       string
+	OrganizationRole string
+	Permissions      []string // List of permission names for this user in this org
+	IsSuperadmin     bool
+}
+
+// Claims represents the JWT claims stored in access/refresh tokens
 type Claims struct {
-	UserID       uuid.UUID  `json:"user_id"`
-	Email        string     `json:"email"`
-	IsSuperadmin bool       `json:"is_superadmin"`
-	CurrentOrgID *uuid.UUID `json:"current_org_id,omitempty"` // Optional: current organization context
+	UserID           uuid.UUID `json:"user_id"`
+	OrganizationID   uuid.UUID `json:"organization_id"`
+	SessionID        uuid.UUID `json:"session_id"`
+	RoleID           uuid.UUID `json:"role_id"`
+	Email            string    `json:"email"`
+	GlobalRole       string    `json:"global_role"`
+	OrganizationRole string    `json:"organization_role"`
+	Permissions      []string  `json:"permissions"` // Cached permission names
+	IsSuperadmin     bool      `json:"is_superadmin"`
+	TokenType        string    `json:"token_type"`
 	jwt.RegisteredClaims
 }
 
-// Service handles JWT operations
+// Service handles JWT operations using RSA keys
 type Service struct {
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	config     *config.JWTConfig
 }
 
-// NewService creates a new JWT service
+// NewService creates a new JWT service (dev uses runtime RSA key)
 func NewService(cfg *config.JWTConfig) (*Service, error) {
-	// For development, generate a key pair. In production, load from environment
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
@@ -51,20 +71,31 @@ func NewService(cfg *config.JWTConfig) (*Service, error) {
 	}, nil
 }
 
-// GenerateAccessToken generates a new access token for a user
-func (s *Service) GenerateAccessToken(user *models.User) (string, error) {
+// GenerateAccessToken creates a short-lived org-scoped access token
+func (s *Service) GenerateAccessToken(ctxInput *TokenContext) (string, error) {
+	if ctxInput == nil {
+		return "", errors.New("token context is required")
+	}
+
 	now := time.Now()
-	expirationTime := now.Add(time.Duration(s.config.AccessTokenTTL) * time.Minute)
+	exp := now.Add(time.Duration(s.config.AccessTokenTTL) * time.Minute)
 
 	claims := &Claims{
-		UserID:       user.ID,
-		Email:        user.Email,
-		IsSuperadmin: user.IsSuperadmin,
+		UserID:           ctxInput.UserID,
+		OrganizationID:   ctxInput.OrganizationID,
+		SessionID:        ctxInput.SessionID,
+		RoleID:           ctxInput.RoleID,
+		Email:            ctxInput.Email,
+		GlobalRole:       ctxInput.GlobalRole,
+		OrganizationRole: ctxInput.OrganizationRole,
+		Permissions:      ctxInput.Permissions,
+		IsSuperadmin:     ctxInput.IsSuperadmin,
+		TokenType:        "access",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
-			Subject:   user.ID.String(),
+			Subject:   ctxInput.UserID.String(),
 			Audience:  jwt.ClaimStrings{"auth-service"},
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			ID:        uuid.New().String(),
@@ -72,44 +103,51 @@ func (s *Service) GenerateAccessToken(user *models.User) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	tokenString, err := token.SignedString(s.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
-	}
-
-	return tokenString, nil
+	return token.SignedString(s.privateKey)
 }
 
-// GenerateRefreshToken generates a new refresh token for a user
-func (s *Service) GenerateRefreshToken(user *models.User) (string, error) {
+// GenerateRefreshToken creates a long-lived refresh token bound to session + org
+func (s *Service) GenerateRefreshToken(ctxInput *TokenContext) (string, string, error) {
+	if ctxInput == nil {
+		return "", "", errors.New("token context is required")
+	}
+
 	now := time.Now()
-	expirationTime := now.AddDate(0, 0, s.config.RefreshTokenTTL)
+	exp := now.AddDate(0, 0, s.config.RefreshTokenTTL)
+	refreshID := uuid.New().String()
 
 	claims := &Claims{
-		UserID:       user.ID,
-		Email:        user.Email,
-		IsSuperadmin: user.IsSuperadmin,
+		UserID:           ctxInput.UserID,
+		OrganizationID:   ctxInput.OrganizationID,
+		SessionID:        ctxInput.SessionID,
+		RoleID:           ctxInput.RoleID,
+		Email:            ctxInput.Email,
+		GlobalRole:       ctxInput.GlobalRole,
+		OrganizationRole: ctxInput.OrganizationRole,
+		Permissions:      ctxInput.Permissions,
+		IsSuperadmin:     ctxInput.IsSuperadmin,
+		TokenType:        "refresh",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
-			Subject:   user.ID.String(),
+			Subject:   ctxInput.UserID.String(),
 			Audience:  jwt.ClaimStrings{"auth-service"},
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
-			ID:        uuid.New().String(),
+			ID:        refreshID,
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tokenString, err := token.SignedString(s.privateKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign refresh token: %w", err)
+		return "", "", fmt.Errorf("failed to sign refresh token: %w", err)
 	}
 
-	return tokenString, nil
+	return tokenString, refreshID, nil
 }
 
-// ValidateToken validates and parses a JWT token
+// ValidateToken parses a JWT and extracts its claims
 func (s *Service) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
@@ -122,71 +160,104 @@ func (s *Service) ValidateToken(tokenString string) (*Claims, error) {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
 	}
 
-	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
-		return claims, nil
+	if c, ok := token.Claims.(*Claims); ok && token.Valid {
+		// Handle nil expiration gracefully
+		if c.ExpiresAt != nil && time.Now().After(c.ExpiresAt.Time) {
+			return nil, errors.New("token expired")
+		}
+		return c, nil
 	}
 
 	return nil, errors.New("invalid token")
 }
 
-// RefreshAccessToken validates a refresh token and generates a new access token
+// ParseAccessToken ensures token type === access
+func (s *Service) ParseAccessToken(tokenString string) (*Claims, error) {
+	c, err := s.ValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if c.TokenType != "access" {
+		return nil, errors.New("token is not an access token")
+	}
+	return c, nil
+}
+
+// ParseRefreshToken ensures token type === refresh
+func (s *Service) ParseRefreshToken(tokenString string) (*Claims, error) {
+	c, err := s.ValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if c.TokenType != "refresh" {
+		return nil, errors.New("token is not a refresh token")
+	}
+	return c, nil
+}
+
+// RefreshAccessToken regenerates a new access token from a refresh token
 func (s *Service) RefreshAccessToken(refreshTokenString string) (string, error) {
-	claims, err := s.ValidateToken(refreshTokenString)
+	c, err := s.ParseRefreshToken(refreshTokenString)
 	if err != nil {
 		return "", fmt.Errorf("invalid refresh token: %w", err)
 	}
 
-	// Create a user object from claims for token generation
-	user := &models.User{
-		ID:           claims.UserID,
-		Email:        claims.Email,
-		IsSuperadmin: claims.IsSuperadmin,
-	}
-
-	return s.GenerateAccessToken(user)
+	return s.GenerateAccessToken(&TokenContext{
+		UserID:           c.UserID,
+		OrganizationID:   c.OrganizationID,
+		SessionID:        c.SessionID,
+		RoleID:           c.RoleID,
+		Email:            c.Email,
+		GlobalRole:       c.GlobalRole,
+		OrganizationRole: c.OrganizationRole,
+		Permissions:      c.Permissions,
+		IsSuperadmin:     c.IsSuperadmin,
+	})
 }
 
-// ExtractUserID extracts user ID from token claims
+// Helpers
 func (s *Service) ExtractUserID(tokenString string) (uuid.UUID, error) {
-	claims, err := s.ValidateToken(tokenString)
+	c, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	return claims.UserID, nil
+	return c.UserID, nil
 }
 
-// ExtractEmail extracts email from token claims
 func (s *Service) ExtractEmail(tokenString string) (string, error) {
-	claims, err := s.ValidateToken(tokenString)
+	c, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return "", err
 	}
-	return claims.Email, nil
+	return c.Email, nil
 }
 
-// IsSuperadmin checks if user is superadmin from token claims
 func (s *Service) IsSuperadmin(tokenString string) (bool, error) {
-	claims, err := s.ValidateToken(tokenString)
+	c, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return false, err
 	}
-	return claims.IsSuperadmin, nil
+	return c.IsSuperadmin, nil
 }
 
-// IsTokenExpired checks if a token is expired
 func (s *Service) IsTokenExpired(tokenString string) bool {
-	claims, err := s.ValidateToken(tokenString)
+	c, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return true
 	}
-	return time.Now().After(claims.ExpiresAt.Time)
+	if c.ExpiresAt == nil {
+		return true
+	}
+	return time.Now().After(c.ExpiresAt.Time)
 }
 
-// GetTokenExpiration returns the expiration time of a token
 func (s *Service) GetTokenExpiration(tokenString string) (time.Time, error) {
-	claims, err := s.ValidateToken(tokenString)
+	c, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return time.Time{}, err
 	}
-	return claims.ExpiresAt.Time, nil
+	if c.ExpiresAt == nil {
+		return time.Time{}, errors.New("token has no expiration claim")
+	}
+	return c.ExpiresAt.Time, nil
 }

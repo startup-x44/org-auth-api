@@ -22,23 +22,13 @@ type UserRepository interface {
 	Deactivate(ctx context.Context, id string) error
 }
 
-// TenantRepository defines the interface for tenant data operations
-type TenantRepository interface {
-	Create(ctx context.Context, tenant *models.Tenant) error
-	GetByID(ctx context.Context, id string) (*models.Tenant, error)
-	GetByDomain(ctx context.Context, domain string) (*models.Tenant, error)
-	Update(ctx context.Context, tenant *models.Tenant) error
-	Delete(ctx context.Context, id string) error
-	List(ctx context.Context, limit, offset int) ([]*models.Tenant, error)
-	Count(ctx context.Context) (int64, error)
-}
-
 // UserSessionRepository defines the interface for user session data operations
 type UserSessionRepository interface {
 	Create(ctx context.Context, session *models.UserSession) error
 	GetByID(ctx context.Context, id string) (*models.UserSession, error)
 	GetByToken(ctx context.Context, token string) (*models.UserSession, error)
 	GetByUserID(ctx context.Context, userID string) ([]*models.UserSession, error)
+	GetByUserAndTenant(ctx context.Context, userID, tenantID string) ([]*models.UserSession, error)
 	GetActiveByUserID(ctx context.Context, userID string) ([]*models.UserSession, error)
 	GetActiveCountByUserID(ctx context.Context, userID string) (int64, error)
 	UpdateActivity(ctx context.Context, id string) error
@@ -57,10 +47,12 @@ type UserSessionRepository interface {
 // RefreshTokenRepository defines the interface for refresh token data operations
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, token *models.RefreshToken) error
-	GetByToken(ctx context.Context, token string) (*models.RefreshToken, error)
+	GetByID(ctx context.Context, id string) (*models.RefreshToken, error)
+	GetActiveBySession(ctx context.Context, sessionID string) ([]*models.RefreshToken, error)
 	GetByUserID(ctx context.Context, userID string) ([]*models.RefreshToken, error)
 	Update(ctx context.Context, token *models.RefreshToken) error
-	Delete(ctx context.Context, token string) error
+	Revoke(ctx context.Context, id string, reason string) error
+	RevokeBySession(ctx context.Context, sessionID string, reason string) error
 	DeleteByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) error
 	CleanupExpired(ctx context.Context, maxAge time.Duration) error
@@ -73,6 +65,7 @@ type PasswordResetRepository interface {
 	GetByEmail(ctx context.Context, email string) (*models.PasswordReset, error)
 	Update(ctx context.Context, reset *models.PasswordReset) error
 	Delete(ctx context.Context, token string) error
+	DeleteByID(ctx context.Context, id string) error
 	DeleteExpired(ctx context.Context) error
 	CleanupExpired(ctx context.Context, maxAge time.Duration) error
 }
@@ -80,8 +73,8 @@ type PasswordResetRepository interface {
 // FailedLoginAttemptRepository defines the interface for failed login attempt data operations
 type FailedLoginAttemptRepository interface {
 	Create(ctx context.Context, attempt *models.FailedLoginAttempt) error
-	GetByEmailAndIP(ctx context.Context, email, ipAddress string, since time.Time) ([]*models.FailedLoginAttempt, error)
-	CountByEmailAndIP(ctx context.Context, email, ipAddress string, since time.Time) (int64, error)
+	GetByEmailAndIP(ctx context.Context, email, tenantID, ipAddress string, since time.Time) ([]*models.FailedLoginAttempt, error)
+	CountByEmailAndIP(ctx context.Context, email, tenantID, ipAddress string, since time.Time) (int64, error)
 	DeleteExpired(ctx context.Context, maxAge time.Duration) error
 	CleanupExpired(ctx context.Context, maxAge time.Duration) error
 }
@@ -126,7 +119,6 @@ type OrganizationInvitationRepository interface {
 // Repository defines the interface for all repository operations
 type Repository interface {
 	User() UserRepository
-	Tenant() TenantRepository
 	Organization() OrganizationRepository
 	OrganizationMembership() OrganizationMembershipRepository
 	OrganizationInvitation() OrganizationInvitationRepository
@@ -134,6 +126,10 @@ type Repository interface {
 	RefreshToken() RefreshTokenRepository
 	PasswordReset() PasswordResetRepository
 	FailedLoginAttempt() FailedLoginAttemptRepository
+	RolePermission() RolePermissionRepository
+	Role() RoleRepository
+	Permission() PermissionRepository
+	CreateDefaultAdminRole(ctx context.Context, orgID, createdBy string) (*models.Role, error)
 	BeginTransaction(ctx context.Context) (Transaction, error)
 }
 
@@ -142,7 +138,6 @@ type Transaction interface {
 	Commit() error
 	Rollback() error
 	User() UserRepository
-	Tenant() TenantRepository
 	Organization() OrganizationRepository
 	OrganizationMembership() OrganizationMembershipRepository
 	OrganizationInvitation() OrganizationInvitationRepository
@@ -150,4 +145,7 @@ type Transaction interface {
 	RefreshToken() RefreshTokenRepository
 	PasswordReset() PasswordResetRepository
 	FailedLoginAttempt() FailedLoginAttemptRepository
+	RolePermission() RolePermissionRepository
+	Role() RoleRepository
+	Permission() PermissionRepository
 }

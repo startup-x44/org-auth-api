@@ -32,16 +32,25 @@ const getCSRFToken = async (): Promise<string | null> => {
 // Request interceptor to add auth token and CSRF token
 api.interceptors.request.use(
   async (config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> => {
-    // Add auth token
-    const accessToken = localStorage.getItem('access_token')
+    // Get organization ID from localStorage
+    const organizationId = localStorage.getItem('organization_id')
+    
+    // Add auth token - check org-specific token first, fallback to global
+    let accessToken = null
+    if (organizationId) {
+      accessToken = localStorage.getItem(`access_token_${organizationId}`)
+    }
+    if (!accessToken) {
+      accessToken = localStorage.getItem('access_token')
+    }
+    
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`
     }
 
-    // Add tenant ID header
-    const tenantId = localStorage.getItem('tenant_id')
-    if (tenantId) {
-      config.headers['X-Tenant-ID'] = tenantId
+    // Add organization ID header
+    if (organizationId) {
+      config.headers['X-Organization-ID'] = organizationId
     }
 
     // Add CSRF token for POST, PUT, DELETE, PATCH requests
@@ -50,6 +59,16 @@ api.interceptors.request.use(
       if (csrfToken) {
         config.headers['X-CSRF-Token'] = csrfToken
       }
+    }
+
+    // Debug log for create-organization requests
+    if (config.url?.includes('create-organization')) {
+      console.log('Axios interceptor - create-organization request:', {
+        url: config.url,
+        method: config.method,
+        data: config.data,
+        headers: config.headers
+      })
     }
 
     return config
@@ -67,11 +86,31 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Handle 401 errors
+    if (error.response?.status === 401) {
+      // If already retried or no refresh token available, redirect to login
+      if (originalRequest._retry) {
+        // Already tried refresh, clear everything and redirect
+        localStorage.clear()
+        window.location.href = '/login'
+        return Promise.reject(error)
+      }
+
+      // Try to refresh token
       originalRequest._retry = true
 
       try {
-        const refreshToken = localStorage.getItem('refresh_token')
+        const organizationId = localStorage.getItem('organization_id')
+        let refreshToken = null
+        
+        // Get org-specific refresh token first, fallback to global
+        if (organizationId) {
+          refreshToken = localStorage.getItem(`refresh_token_${organizationId}`)
+        }
+        if (!refreshToken) {
+          refreshToken = localStorage.getItem('refresh_token')
+        }
+        
         if (refreshToken) {
           const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080'
           const response: AxiosResponse = await axios.post(
@@ -79,22 +118,30 @@ api.interceptors.response.use(
             { refresh_token: refreshToken }
           )
 
-          const { access_token, refresh_token } = response.data.data.token
+          const { access_token, refresh_token: new_refresh_token } = response.data.data.token
 
-          // Store tokens
-          localStorage.setItem('access_token', access_token)
-          localStorage.setItem('refresh_token', refresh_token)
+          // Store tokens with org-specific keys
+          if (organizationId) {
+            localStorage.setItem(`access_token_${organizationId}`, access_token)
+            localStorage.setItem(`refresh_token_${organizationId}`, new_refresh_token)
+          } else {
+            localStorage.setItem('access_token', access_token)
+            localStorage.setItem('refresh_token', new_refresh_token)
+          }
 
           originalRequest.headers.Authorization = `Bearer ${access_token}`
           return api(originalRequest)
+        } else {
+          // No refresh token, clear storage and redirect to login
+          localStorage.clear()
+          window.location.href = '/login'
+          return Promise.reject(error)
         }
       } catch (refreshError) {
-        // Refresh failed, redirect to login
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
-        localStorage.removeItem('user')
-        localStorage.removeItem('tenant_id')
+        // Refresh failed, clear everything and redirect to login
+        localStorage.clear()
         window.location.href = '/login'
+        return Promise.reject(refreshError)
       }
     }
 

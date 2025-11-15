@@ -3,13 +3,18 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import useAuthStore from '@/store/auth'
 import LoadingSpinner from '@/components/ui/loading-spinner'
+import { Toaster } from '@/components/ui/toaster'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
+import AcceptInvitation from '@/pages/AcceptInvitation'
+import ChooseOrganization from '@/pages/ChooseOrganization'
+import CreateOrganization from '@/pages/CreateOrganization'
 import Dashboard from '@/pages/Dashboard'
 import Profile from '@/pages/Profile'
 import Settings from '@/pages/Settings'
+import Members from '@/pages/Members'
 import Admin from '@/pages/Admin'
 
 // Create a client
@@ -97,6 +102,22 @@ function App() {
                 </PublicRoute>
               }
             />
+            <Route
+              path="/accept-invitation"
+              element={<AcceptInvitation />}
+            />
+            <Route
+              path="/choose-organization"
+              element={
+                <ChooseOrganization />
+              }
+            />
+            <Route
+              path="/create-organization"
+              element={
+                <CreateOrganization />
+              }
+            />
 
             {/* Protected routes */}
             <Route
@@ -124,6 +145,14 @@ function App() {
               }
             />
             <Route
+              path="/members"
+              element={
+                <ProtectedRoute>
+                  <Members />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/admin"
               element={
                 <ProtectedRoute>
@@ -137,6 +166,7 @@ function App() {
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
+        <Toaster />
       </Router>
     </QueryClientProvider>
   )
