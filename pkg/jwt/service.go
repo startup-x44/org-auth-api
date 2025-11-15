@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
-	"github.com/google/uuid"
 	"auth-service/internal/config"
 	"auth-service/internal/models"
+
+	"github.com/golang-jwt/jwt/v4"
+	"github.com/google/uuid"
 )
 
 // JWTService defines the interface for JWT operations
@@ -21,9 +22,10 @@ type JWTService interface {
 
 // Claims represents the JWT claims
 type Claims struct {
-	UserID   uuid.UUID `json:"user_id"`
-	TenantID uuid.UUID `json:"tenant_id"`
-	UserType string    `json:"user_type"`
+	UserID       uuid.UUID  `json:"user_id"`
+	Email        string     `json:"email"`
+	IsSuperadmin bool       `json:"is_superadmin"`
+	CurrentOrgID *uuid.UUID `json:"current_org_id,omitempty"` // Optional: current organization context
 	jwt.RegisteredClaims
 }
 
@@ -55,13 +57,13 @@ func (s *Service) GenerateAccessToken(user *models.User) (string, error) {
 	expirationTime := now.Add(time.Duration(s.config.AccessTokenTTL) * time.Minute)
 
 	claims := &Claims{
-		UserID:   user.ID,
-		TenantID: user.TenantID,
-		UserType: user.UserType,
+		UserID:       user.ID,
+		Email:        user.Email,
+		IsSuperadmin: user.IsSuperadmin,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
 			Subject:   user.ID.String(),
-			Audience:  jwt.ClaimStrings{user.TenantID.String()},
+			Audience:  jwt.ClaimStrings{"auth-service"},
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -84,13 +86,13 @@ func (s *Service) GenerateRefreshToken(user *models.User) (string, error) {
 	expirationTime := now.AddDate(0, 0, s.config.RefreshTokenTTL)
 
 	claims := &Claims{
-		UserID:   user.ID,
-		TenantID: user.TenantID,
-		UserType: user.UserType,
+		UserID:       user.ID,
+		Email:        user.Email,
+		IsSuperadmin: user.IsSuperadmin,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
 			Subject:   user.ID.String(),
-			Audience:  jwt.ClaimStrings{user.TenantID.String()},
+			Audience:  jwt.ClaimStrings{"auth-service"},
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
@@ -136,21 +138,12 @@ func (s *Service) RefreshAccessToken(refreshTokenString string) (string, error) 
 
 	// Create a user object from claims for token generation
 	user := &models.User{
-		ID:       claims.UserID,
-		TenantID: claims.TenantID,
-		UserType: claims.UserType,
+		ID:           claims.UserID,
+		Email:        claims.Email,
+		IsSuperadmin: claims.IsSuperadmin,
 	}
 
 	return s.GenerateAccessToken(user)
-}
-
-// ExtractTenantID extracts tenant ID from token claims
-func (s *Service) ExtractTenantID(tokenString string) (uuid.UUID, error) {
-	claims, err := s.ValidateToken(tokenString)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return claims.TenantID, nil
 }
 
 // ExtractUserID extracts user ID from token claims
@@ -162,13 +155,22 @@ func (s *Service) ExtractUserID(tokenString string) (uuid.UUID, error) {
 	return claims.UserID, nil
 }
 
-// ExtractUserType extracts user type from token claims
-func (s *Service) ExtractUserType(tokenString string) (string, error) {
+// ExtractEmail extracts email from token claims
+func (s *Service) ExtractEmail(tokenString string) (string, error) {
 	claims, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return "", err
 	}
-	return claims.UserType, nil
+	return claims.Email, nil
+}
+
+// IsSuperadmin checks if user is superadmin from token claims
+func (s *Service) IsSuperadmin(tokenString string) (bool, error) {
+	claims, err := s.ValidateToken(tokenString)
+	if err != nil {
+		return false, err
+	}
+	return claims.IsSuperadmin, nil
 }
 
 // IsTokenExpired checks if a token is expired

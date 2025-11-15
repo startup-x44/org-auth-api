@@ -14,7 +14,7 @@ const api = axios.create({
 const getCSRFToken = async () => {
   try {
     const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
-    const response = await axios.get(`${baseURL}/health`, { 
+    const response = await axios.get(`${baseURL}/health`, {
       withCredentials: true,
       headers: {
         'Accept': 'application/json',
@@ -22,7 +22,6 @@ const getCSRFToken = async () => {
     });
     // Axios normalizes headers to lowercase
     const token = response.headers['x-csrf-token'];
-    console.log('CSRF Token fetched:', token); // Debug log
     return token;
   } catch (error) {
     console.error('Failed to get CSRF token:', error);
@@ -33,24 +32,21 @@ const getCSRFToken = async () => {
 // Request interceptor to add auth token and CSRF token
 api.interceptors.request.use(
   async (config) => {
-    // Add tenant ID if available
+    // Add auth token
+    const accessToken = localStorage.getItem('access_token');
+    if (accessToken) {
+      config.headers.Authorization = `Bearer ${accessToken}`;
+    }
+
+    // Add tenant ID header
     const tenantId = localStorage.getItem('tenant_id');
     if (tenantId) {
       config.headers['X-Tenant-ID'] = tenantId;
     }
 
-    // Add auth token using tenant-specific key
-    if (tenantId) {
-      const token = localStorage.getItem(`access_token_${tenantId}`);
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-    }
-
     // Add CSRF token for POST, PUT, DELETE, PATCH requests
     if (['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
       const csrfToken = await getCSRFToken();
-      console.log('Adding CSRF token to request:', csrfToken); // Debug log
       if (csrfToken) {
         config.headers['X-CSRF-Token'] = csrfToken;
       }
@@ -75,8 +71,7 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const tenantId = localStorage.getItem('tenant_id');
-        const refreshToken = tenantId ? localStorage.getItem(`refresh_token_${tenantId}`) : null;
+        const refreshToken = localStorage.getItem('refresh_token');
         if (refreshToken) {
           const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
           const response = await axios.post(
@@ -86,24 +81,18 @@ api.interceptors.response.use(
 
           const { access_token, refresh_token } = response.data.data.token;
 
-          // Store with tenant-specific keys
-          if (tenantId) {
-            localStorage.setItem(`access_token_${tenantId}`, access_token);
-            localStorage.setItem(`refresh_token_${tenantId}`, refresh_token);
-          }
+          // Store tokens
+          localStorage.setItem('access_token', access_token);
+          localStorage.setItem('refresh_token', refresh_token);
 
           originalRequest.headers.Authorization = `Bearer ${access_token}`;
           return api(originalRequest);
         }
       } catch (refreshError) {
         // Refresh failed, redirect to login
-        localStorage.removeItem('tenant_id');
-        const tenantId = localStorage.getItem('tenant_id');
-        if (tenantId) {
-          localStorage.removeItem(`access_token_${tenantId}`);
-          localStorage.removeItem(`refresh_token_${tenantId}`);
-          localStorage.removeItem(`user_${tenantId}`);
-        }
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('user');
         window.location.href = '/login';
       }
     }
@@ -117,7 +106,7 @@ export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
   refreshToken: (data) => api.post('/auth/refresh', data),
-  logout: (data) => api.post('/user/logout', data),
+  logout: () => api.post('/user/logout'),
   forgotPassword: (data) => api.post('/auth/forgot-password', data),
   resetPassword: (data) => api.post('/auth/reset-password', data),
 };
@@ -129,24 +118,40 @@ export const userAPI = {
   changePassword: (data) => api.post('/user/change-password', data),
 };
 
+// Organization API functions
+export const organizationAPI = {
+  listOrganizations: () => api.get('/organizations'),
+  createOrganization: (data) => api.post('/organizations', data),
+  getOrganization: (orgId) => api.get(`/organizations/${orgId}`),
+  updateOrganization: (orgId, data) => api.put(`/organizations/${orgId}`, data),
+  deleteOrganization: (orgId) => api.delete(`/organizations/${orgId}`),
+
+  // Members
+  listMembers: (orgId) => api.get(`/organizations/${orgId}/members`),
+  inviteUser: (orgId, data) => api.post(`/organizations/${orgId}/members`, data),
+  updateMember: (orgId, userId, data) => api.put(`/organizations/${orgId}/members/${userId}`, data),
+  removeMember: (orgId, userId) => api.delete(`/organizations/${orgId}/members/${userId}`),
+
+  // Invitations
+  listInvitations: (orgId) => api.get(`/organizations/${orgId}/invitations`),
+  cancelInvitation: (orgId, invitationId) => api.delete(`/organizations/${orgId}/invitations/${invitationId}`),
+  acceptInvitation: (token) => api.post(`/invitations/${token}/accept`),
+  getInvitationDetails: (token) => api.get(`/invitations/${token}`),
+};
+
 // Admin API functions
 export const adminAPI = {
   listUsers: (params) => api.get('/admin/users', { params }),
   activateUser: (userId) => api.put(`/admin/users/${userId}/activate`),
   deactivateUser: (userId) => api.put(`/admin/users/${userId}/deactivate`),
   deleteUser: (userId) => api.delete(`/admin/users/${userId}`),
-  createTenant: (data) => api.post('/admin/tenants', data),
-  listTenants: (params) => api.get('/admin/tenants', { params }),
-  getTenant: (tenantId) => api.get(`/admin/tenants/${tenantId}`),
-  updateTenant: (tenantId, data) => api.put(`/admin/tenants/${tenantId}`, data),
-  deleteTenant: (tenantId) => api.delete(`/admin/tenants/${tenantId}`),
 };
 
 // Health check
 export const healthAPI = {
   check: () => {
     const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
-    return axios.get(`${baseURL}/health`, { 
+    return axios.get(`${baseURL}/health`, {
       withCredentials: true,
       headers: {
         'Accept': 'application/json',

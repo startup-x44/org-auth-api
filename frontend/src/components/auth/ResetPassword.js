@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { authAPI } from '../../services/api';
+import useAuthStore from '../../stores/authStore';
+import { Button, Input, Loading } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const ResetPassword = () => {
   const [searchParams] = useSearchParams();
@@ -10,64 +12,83 @@ const ResetPassword = () => {
     confirmPassword: '',
   });
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState({});
   const [tokenValid, setTokenValid] = useState(null);
+
+  const { resetPassword } = useAuthStore();
+  const { error: showError, success: showSuccess } = useNotificationStore();
 
   const token = searchParams.get('token');
   const email = searchParams.get('email');
 
   useEffect(() => {
     if (!token || !email) {
-      setError('Invalid reset link. Please request a new password reset.');
       setTokenValid(false);
     } else {
       setTokenValid(true);
     }
   }, [token, email]);
 
+  const validateForm = () => {
+    const newErrors = {};
+
+    if (!formData.password) {
+      newErrors.password = 'Password is required';
+    } else if (formData.password.length < 8) {
+      newErrors.password = 'Password must be at least 8 characters long';
+    }
+
+    if (!formData.confirmPassword) {
+      newErrors.confirmPassword = 'Please confirm your password';
+    } else if (formData.password !== formData.confirmPassword) {
+      newErrors.confirmPassword = 'Passwords do not match';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!validateForm()) {
+      return;
+    }
+
     setLoading(true);
-    setError('');
-    setMessage('');
-
-    if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match.');
-      setLoading(false);
-      return;
-    }
-
-    if (formData.password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      setLoading(false);
-      return;
-    }
 
     try {
-      await authAPI.resetPassword({
-        token,
-        email,
-        password: formData.password,
-      });
+      const result = await resetPassword(token, email, formData.password);
 
-      setMessage('Password reset successfully! Redirecting to login...');
-      setTimeout(() => {
-        navigate('/login');
-      }, 2000);
+      if (result.success) {
+        showSuccess('Password reset successfully! Redirecting to login...');
+        setTimeout(() => {
+          navigate('/login');
+        }, 2000);
+      } else {
+        showError(result.message);
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to reset password. Please try again.');
-      console.error('Reset password error:', err);
+      const errorMessage = 'Failed to reset password. Please try again.';
+      showError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
   const handleChange = (e) => {
+    const { name, value } = e.target;
     setFormData({
       ...formData,
-      [e.target.name]: e.target.value,
+      [name]: value,
     });
+    // Clear error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({
+        ...prev,
+        [name]: undefined,
+      }));
+    }
   };
 
   if (tokenValid === false) {
@@ -75,26 +96,26 @@ const ResetPassword = () => {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           <div>
-            <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-error bg-opacity-10">
-              <svg className="h-6 w-6 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-red-100">
+              <svg className="h-6 w-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
             </div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
               Invalid reset link
             </h2>
             <p className="mt-2 text-center text-sm text-gray-600">
-              {error}
+              The reset link is invalid or has expired.
             </p>
           </div>
 
           <div className="text-center">
-            <button
+            <Button
               onClick={() => navigate('/forgot-password')}
-              className="btn btn-primary"
+              variant="primary"
             >
               Request new reset link
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -102,18 +123,14 @@ const ResetPassword = () => {
   }
 
   if (tokenValid === null) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
+    return <Loading fullScreen text="Validating reset link..." />;
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
             Reset your password
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
@@ -122,51 +139,27 @@ const ResetPassword = () => {
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {message && (
-            <div className="bg-success bg-opacity-10 border border-success border-opacity-20 text-success px-4 py-3 rounded-md">
-              {message}
-            </div>
-          )}
+          <Input
+            label="New Password"
+            name="password"
+            type="password"
+            required
+            placeholder="Enter new password"
+            value={formData.password}
+            onChange={handleChange}
+            error={errors.password}
+          />
 
-          {error && (
-            <div className="bg-error bg-opacity-10 border border-error border-opacity-20 text-error px-4 py-3 rounded-md">
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label htmlFor="password" className="sr-only">
-              New Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              required
-              className="input"
-              placeholder="New password"
-              value={formData.password}
-              onChange={handleChange}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="confirmPassword" className="sr-only">
-              Confirm New Password
-            </label>
-            <input
-              id="confirmPassword"
-              name="confirmPassword"
-              type="password"
-              autoComplete="new-password"
-              required
-              className="input"
-              placeholder="Confirm new password"
-              value={formData.confirmPassword}
-              onChange={handleChange}
-            />
-          </div>
+          <Input
+            label="Confirm New Password"
+            name="confirmPassword"
+            type="password"
+            required
+            placeholder="Confirm new password"
+            value={formData.confirmPassword}
+            onChange={handleChange}
+            error={errors.confirmPassword}
+          />
 
           <div className="text-sm text-gray-600">
             <ul className="list-disc list-inside space-y-1">
@@ -176,20 +169,14 @@ const ResetPassword = () => {
           </div>
 
           <div>
-            <button
+            <Button
               type="submit"
-              disabled={loading}
-              className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              variant="primary"
+              className="w-full"
+              loading={loading}
             >
-              {loading ? (
-                <div className="flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Resetting...
-                </div>
-              ) : (
-                'Reset password'
-              )}
-            </button>
+              Reset password
+            </Button>
           </div>
         </form>
       </div>

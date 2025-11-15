@@ -1,442 +1,599 @@
-# SaaS Authentication Microservice
+# Multi-Tenant Authentication Service
 
-A production-ready authentication microservice built with Go, providing multi-tenant user management, JWT authentication, and comprehensive security features for the Blocksure platform.
+A comprehensive SaaS authentication system built with Go and React, featuring domain-based multi-tenancy, JWT authentication, and role-based access control.
 
-## Features
+## Table of Contents
 
-- **Multi-tenant Architecture**: Domain-based and header-based tenant isolation
-- **JWT Authentication**: RSA-signed tokens with configurable expiry
-- **Secure Password Hashing**: Argon2id algorithm for password security
-- **Session Management**: Redis-backed session storage with TTL
-- **User Management**: Complete CRUD operations with role-based access
-- **Password Reset**: Secure token-based password reset flow
-- **Rate Limiting**: Configurable rate limiting for API protection
-- **Admin Panel**: Administrative functions for user and tenant management
-- **Database Seeding**: Automated test data seeding for development
-- **Comprehensive Testing**: Unit and feature tests with isolated databases
-- **Health Checks**: Comprehensive health monitoring
-- **Docker Support**: Containerized deployment with docker-compose
+- [Architecture Overview](#architecture-overview)
+- [Technology Stack](#technology-stack)
+- [Database Schema](#database-schema)
+- [API Documentation](#api-documentation)
+- [Authentication Flow](#authentication-flow)
+- [Multi-Tenant Implementation](#multi-tenant-implementation)
+- [Development Setup](#development-setup)
+- [Deployment](#deployment)
 
-## Tech Stack
+## Architecture Overview
 
-- **Backend**: Go 1.23, Gin web framework
-- **Database**: PostgreSQL with GORM ORM
-- **Cache**: Redis for session management
-- **Security**: JWT with RSA signing, Argon2id password hashing
-- **Testing**: Testify, isolated test databases
-- **Container**: Docker with multi-stage builds
+### System Components
 
-## Quick Start
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   React SPA     │    │   Gin API       │    │   PostgreSQL    │
+│   (Frontend)    │◄──►│   (Backend)     │◄──►│   (Database)    │
+│                 │    │                 │    │                 │
+│ • JWT Auth      │    │ • JWT Service   │    │ • Users         │
+│ • Tenant-aware  │    │ • Multi-tenant  │    │ • Tenants       │
+│ • localStorage  │    │ • Role-based    │    │ • Sessions      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │     Redis       │
+                       │  (Sessions)     │
+                       └─────────────────┘
+```
 
-### Prerequisites
+### Key Features
 
-- Go 1.23+
-- PostgreSQL 15+
-- Redis 7+
-- Docker & Docker Compose (optional)
+- **Multi-Tenant Architecture**: Domain-based tenant isolation
+- **JWT Authentication**: RSA-signed tokens with tenant claims
+- **Session Management**: Redis-backed sessions with device tracking
+- **Role-Based Access**: Global user types with admin privileges
+- **Security Features**: CSRF protection, rate limiting, account lockout
+- **Auto Tenant Creation**: Organizations created automatically from email domains
 
-### Local Development
+## Technology Stack
 
-1. **Clone and setup:**
-   ```bash
-   git clone <repository-url>
-   cd auth-service
-   ```
+### Backend
+- **Language**: Go 1.23
+- **Framework**: Gin (HTTP router)
+- **ORM**: GORM v2
+- **Database**: PostgreSQL
+- **Cache**: Redis
+- **Authentication**: Custom JWT with RSA signing
+- **Password Hashing**: Argon2id
 
-2. **Environment variables:**
-   Create a `.env` file or set environment variables:
-   ```bash
-   export SERVER_PORT=8080
-   export ENVIRONMENT=development
-   export DATABASE_HOST=localhost
-   export DATABASE_PORT=5432
-   export DATABASE_USER=auth_user
-   export DATABASE_PASSWORD=auth_password
-   export DATABASE_NAME=auth_db
-   export DATABASE_SSLMODE=disable
-   export REDIS_HOST=localhost
-   export REDIS_PORT=6379
-   export JWT_SECRET=your-super-secret-jwt-key-change-in-production
-   export JWT_ACCESS_TOKEN_EXPIRY=3600
-   export JWT_REFRESH_TOKEN_EXPIRY=604800
-   ```
+### Frontend
+- **Framework**: React 18.2.0
+- **Build Tool**: Create React App
+- **Styling**: Tailwind CSS 3.3.2
+- **Routing**: React Router DOM v6
+- **HTTP Client**: Axios with interceptors
+- **State Management**: React Context
 
-3. **Database setup:**
-   ```bash
-   createdb auth_db
-   createuser auth_user --password
-   ```
+### DevOps
+- **Containerization**: Docker & Docker Compose
+- **Development**: Hot reload with CompileDaemon
+- **Testing**: Isolated test databases
+- **CI/CD**: GitHub Actions (planned)
 
-4. **Quick development start (recommended):**
-   ```bash
-   ./dev.sh dev
-   ```
+## Database Schema
 
-5. **Manual Docker Compose commands:**
-   ```bash
-   # Development with live reload
-   docker-compose -f docker-compose.dev.yml up --build
+### Core Tables
 
-   # Production
-   docker-compose up --build
-   ```
+#### Users Table
+```sql
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    email VARCHAR NOT NULL,
+    email_verified_at TIMESTAMP,
+    password_hash VARCHAR NOT NULL,
+    firstname VARCHAR(100),
+    lastname VARCHAR(100),
+    address TEXT,
+    phone VARCHAR(20),
+    user_type VARCHAR NOT NULL, -- Admin, Student, RTO, Issuer, Validator, badger, Non-partner, Partner
+    status VARCHAR DEFAULT 'active', -- active, suspended, deactivated
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
 
-6. **Run locally:**
-   ```bash
-   go mod tidy
-   go run cmd/server/main.go
-   ```
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
 
-#### Multi-Tenant Development Setup
+-- Indexes
+CREATE INDEX idx_users_type ON users(user_type);
+CREATE INDEX idx_users_status ON users(status);
+CREATE UNIQUE INDEX idx_users_email_tenant ON users(email, tenant_id);
+```
 
-For testing multi-tenant functionality locally:
+#### Tenants Table
+```sql
+CREATE TABLE tenants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR NOT NULL,
+    domain VARCHAR UNIQUE NOT NULL,
+    status VARCHAR DEFAULT 'active', -- active, suspended
+    settings JSONB DEFAULT '{}',
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+```
 
-1. **Frontend Development:**
-   ```bash
-   cd frontend
-   npm install
-   npm start
-   ```
-   The frontend will run on `http://localhost:3000`
+#### Sessions Table
+```sql
+CREATE TABLE user_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    tenant_id UUID NOT NULL,
+    token_hash VARCHAR UNIQUE NOT NULL,
+    ip_address INET,
+    user_agent TEXT,
+    device_fingerprint TEXT,
+    location TEXT,
+    is_active BOOLEAN DEFAULT true,
+    last_activity TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP,
+    revoked_reason TEXT,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
 
-2. **Tenant Subdomain Testing:**
-   To test tenant subdomains in development, you can:
-   
-   - Use browser developer tools to modify the `document.location.hostname`
-   - Set up local DNS aliases (e.g., add to `/etc/hosts`):
-     ```
-     127.0.0.1 tenant1.localhost
-     127.0.0.1 tenant2.localhost
-     ```
-   - Use a proxy tool to route subdomain requests to localhost:3000
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
 
-3. **CORS Configuration:**
-   The backend is configured to allow:
-   - `http://localhost:3000`
-   - `*.localhost:3000` (for tenant subdomains)
+-- Indexes
+CREATE INDEX idx_sessions_user ON user_sessions(user_id);
+CREATE INDEX idx_sessions_tenant ON user_sessions(tenant_id);
+CREATE UNIQUE INDEX idx_sessions_token ON user_sessions(token_hash);
+CREATE INDEX idx_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX idx_sessions_activity ON user_sessions(last_activity);
+```
 
-4. **Testing Different Tenants:**
-   - Register/Login with emails from different domains
-   - The system auto-resolves tenant from email domain or subdomain
-   - Each tenant's data is completely isolated
+#### Additional Tables
 
-### Development with Live Reload
+**Refresh Tokens**
+```sql
+CREATE TABLE refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    tenant_id UUID NOT NULL,
+    token_hash VARCHAR UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL,
 
-For development with automatic code reloading:
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+```
 
-1. **Use the development Docker Compose:**
-   ```bash
-   docker-compose -f docker-compose.dev.yml up --build
-   ```
+**Password Resets**
+```sql
+CREATE TABLE password_resets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    tenant_id UUID NOT NULL,
+    token_hash VARCHAR UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL,
 
-2. **Or run locally with air:**
-   ```bash
-   # Install air globally
-   go install github.com/cosmtrek/air@latest
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+```
 
-   # Run with live reload
-   air
-   ```
+**Failed Login Attempts**
+```sql
+CREATE TABLE failed_login_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID,
+    tenant_id UUID NOT NULL,
+    email VARCHAR NOT NULL,
+    ip_address INET NOT NULL,
+    user_agent TEXT,
+    attempted_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL,
 
-The development setup includes:
-- **Live reload** using `CompileDaemon` - automatically rebuilds and restarts on code changes
-- **Volume mounting** - source code changes are reflected instantly
-- **Dependency caching** - Go modules are cached for faster rebuilds
-- **Same services** - PostgreSQL and Redis are included in the dev environment
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
 
-### Production Deployment
-
-For production deployment, use the standard setup:
-
-## Seeded Test Data
-
-The service automatically seeds test data on startup for development:
-
-### Tenants
-- `default.local` - Default Organization
-- `demo.company.com` - Demo Company
-- `test.org` - Test Organization
-
-### Users (All tenants have similar user sets)
-
-| Email | Password | User Type | Description |
-|-------|----------|-----------|-------------|
-| `admin@{tenant}` | `Admin123!` | Admin | Administrative access |
-| `student@{tenant}` | `Student123!` | Student | Student user |
-| `rto@{tenant}` | `RTO123!` | RTO | Registered Training Organization |
-
-### Example Login
-```bash
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@default.local", "password": "Admin123!", "tenant_id": "default.local"}'
+-- Indexes
+CREATE INDEX idx_failed_attempts_user ON failed_login_attempts(user_id);
+CREATE INDEX idx_failed_attempts_email_ip ON failed_login_attempts(email, ip_address, tenant_id);
 ```
 
 ## API Documentation
 
 ### Authentication Endpoints
 
-#### Register User
-```http
-POST /api/v1/auth/register
-Content-Type: application/json
+#### POST /api/v1/auth/register
+Register a new user account.
 
+**Request Body:**
+```json
 {
-  "email": "user@example.com",
+  "email": "user@company.com",
   "password": "SecurePass123!",
   "confirm_password": "SecurePass123!",
-  "user_type": "student",
-  "tenant_id": "tenant-uuid",
+  "user_type": "Student",
+  "tenant_id": "company.com",
   "first_name": "John",
-  "last_name": "Doe"
-}
-```
-
-#### Login
-```http
-POST /api/v1/auth/login
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "password": "SecurePass123!",
-  "tenant_id": "tenant-uuid"
-}
-```
-
-#### Refresh Token
-```http
-POST /api/v1/auth/refresh
-Content-Type: application/json
-
-{
-  "refresh_token": "refresh-token-here"
-}
-```
-
-### User Endpoints
-
-#### Get Profile
-```http
-GET /api/v1/user/profile
-Authorization: Bearer <access-token>
-X-Tenant-ID: tenant-uuid
-```
-
-#### Update Profile
-```http
-PUT /api/v1/user/profile
-Authorization: Bearer <access-token>
-X-Tenant-ID: tenant-uuid
-Content-Type: application/json
-
-{
-  "first_name": "Jane",
-  "last_name": "Smith",
+  "last_name": "Doe",
   "phone": "+1234567890"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@company.com",
+      "user_type": "Student",
+      "tenant_id": "uuid",
+      "first_name": "John",
+      "last_name": "Doe",
+      "is_active": true
+    },
+    "token": {
+      "access_token": "jwt_token",
+      "refresh_token": "refresh_token",
+      "expires_in": 3600,
+      "token_type": "Bearer"
+    }
+  }
+}
+```
+
+#### POST /api/v1/auth/login
+Authenticate a user.
+
+**Request Body:**
+```json
+{
+  "email": "user@company.com",
+  "password": "SecurePass123!",
+  "tenant_id": "company.com"
+}
+```
+
+#### POST /api/v1/auth/refresh
+Refresh access token.
+
+**Request Body:**
+```json
+{
+  "refresh_token": "refresh_token_here"
+}
+```
+
+### User Management Endpoints
+
+#### GET /api/v1/user/profile
+Get current user profile.
+
+**Headers:**
+```
+Authorization: Bearer <access_token>
+X-Tenant-ID: <tenant_id>
+```
+
+#### PUT /api/v1/user/profile
+Update user profile.
+
+**Request Body:**
+```json
+{
+  "first_name": "John",
+  "last_name": "Smith",
+  "phone": "+1987654321"
+}
+```
+
+#### POST /api/v1/user/change-password
+Change user password.
+
+**Request Body:**
+```json
+{
+  "current_password": "OldPass123!",
+  "new_password": "NewPass123!",
+  "confirm_password": "NewPass123!"
 }
 ```
 
 ### Admin Endpoints
 
-#### List Users
-```http
-GET /api/v1/admin/users?limit=10&offset=0
-Authorization: Bearer <admin-access-token>
-X-Tenant-ID: tenant-uuid
-```
+#### GET /api/v1/admin/users
+List users (paginated).
 
-#### Create Tenant
-```http
-POST /api/v1/admin/tenants
-Authorization: Bearer <admin-access-token>
-Content-Type: application/json
+**Query Parameters:**
+- `limit`: Number of users to return (default: 10, max: 100)
+- `cursor`: Cursor for pagination
 
+#### PUT /api/v1/admin/users/{userId}/activate
+Activate a user account.
+
+#### PUT /api/v1/admin/users/{userId}/deactivate
+Deactivate a user account.
+
+#### DELETE /api/v1/admin/users/{userId}
+Delete a user account.
+
+#### POST /api/v1/admin/tenants
+Create a new tenant.
+
+**Request Body:**
+```json
 {
-  "name": "New Organization",
-  "domain": "neworg.com"
+  "name": "New Company",
+  "domain": "newcompany.com"
 }
 ```
 
-## Configuration
+#### GET /api/v1/admin/tenants
+List tenants (paginated).
 
-### Environment Variables
+#### GET /api/v1/admin/tenants/{tenantId}
+Get tenant details.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SERVER_PORT` | Server port | `8080` |
-| `ENVIRONMENT` | Environment (development/production) | `development` |
-| `DATABASE_HOST` | PostgreSQL host | `localhost` |
-| `DATABASE_PORT` | PostgreSQL port | `5432` |
-| `DATABASE_USER` | PostgreSQL user | `auth_user` |
-| `DATABASE_PASSWORD` | PostgreSQL password | `auth_password` |
-| `DATABASE_NAME` | PostgreSQL database name | `auth_db` |
-| `DATABASE_SSLMODE` | SSL mode | `disable` |
-| `REDIS_HOST` | Redis host | `localhost` |
-| `REDIS_PORT` | Redis port | `6379` |
-| `REDIS_PASSWORD` | Redis password | (empty) |
-| `REDIS_DB` | Redis database | `0` |
-| `JWT_SECRET` | JWT signing secret | (required) |
-| `JWT_ACCESS_TOKEN_EXPIRY` | Access token expiry (seconds) | `3600` |
-| `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiry (seconds) | `604800` |
-| `PASSWORD_MIN_LENGTH` | Minimum password length | `8` |
-| `RATE_LIMIT_REQUESTS` | Rate limit requests per window | `100` |
-| `RATE_LIMIT_WINDOW` | Rate limit window (seconds) | `60` |
+#### PUT /api/v1/admin/tenants/{tenantId}
+Update tenant.
 
-## Security Features
+#### DELETE /api/v1/admin/tenants/{tenantId}
+Delete tenant.
 
-- **Password Requirements**: Minimum 8 characters, uppercase, lowercase, number, special character
-- **JWT Security**: RSA signing with configurable expiry
-- **Rate Limiting**: Configurable request limits per time window
-- **Input Validation**: Comprehensive validation for all inputs
-- **SQL Injection Protection**: Parameterized queries with GORM
-- **CORS Protection**: Configurable CORS headers
-- **Session Management**: Secure session handling with Redis TTL
+## Authentication Flow
 
-## Database Schema
+### Registration Flow
 
-### Users Table
-- `id` (UUID, Primary Key)
-- `email` (String, Unique per tenant)
-- `password` (String, Hashed)
-- `type` (String, User role)
-- `tenant_id` (UUID, Foreign Key)
-- `first_name` (String, Optional)
-- `last_name` (String, Optional)
-- `phone` (String, Optional)
-- `is_active` (Boolean)
-- `created_at`, `updated_at`, `last_login_at` (Timestamps)
+1. **Client Request**: User submits registration form with email
+2. **Tenant Resolution**: Frontend extracts domain from email (e.g., `user@company.com` → `company.com`)
+3. **Backend Validation**: Server validates email format and password strength
+4. **Tenant Lookup**: Check if tenant exists for domain
+5. **Auto Tenant Creation**: If tenant doesn't exist, create it automatically
+6. **User Creation**: Create user account linked to tenant
+7. **Password Hashing**: Hash password using Argon2id
+8. **Token Generation**: Generate JWT tokens with tenant claims
+9. **Session Creation**: Create Redis-backed session
+10. **Response**: Return user data and tokens
 
-### Tenants Table
-- `id` (UUID, Primary Key)
-- `name` (String)
-- `domain` (String, Unique)
-- `created_at`, `updated_at` (Timestamps)
+### Login Flow
 
-### Sessions Table
-- `id` (UUID, Primary Key)
-- `user_id` (UUID, Foreign Key)
-- `expires_at` (Timestamp)
+1. **Client Request**: User submits email, password, and tenant_id
+2. **Tenant Validation**: Verify tenant exists and is active
+3. **Account Lockout Check**: Check for too many failed attempts
+4. **User Lookup**: Find user by email and tenant_id
+5. **Password Verification**: Compare Argon2id hash
+6. **Session Management**: Create/update Redis session
+7. **Token Generation**: Generate new JWT tokens
+8. **Activity Logging**: Update last login timestamp
+9. **Response**: Return user data and tokens
 
-### Refresh Tokens Table
-- `user_id` (UUID, Primary Key)
-- `token` (String, Primary Key)
-- `expires_at` (Timestamp)
+### Token Refresh Flow
 
-### Password Resets Table
-- `email` (String, Primary Key)
-- `tenant_id` (UUID, Primary Key)
-- `token` (String)
-- `expires_at` (Timestamp)
+1. **Client Request**: Send refresh token
+2. **Token Validation**: Verify refresh token exists and not expired
+3. **User Verification**: Ensure user still exists and is active
+4. **New Token Generation**: Create fresh access token
+5. **Token Update**: Update refresh token expiration
+6. **Response**: Return new token pair
 
-## Documentation
+## Multi-Tenant Implementation
 
-- **[API Specification](docs/api-spec.yaml)** - OpenAPI 3.0 specification
-- **[Postman Collection](docs/postman-collection.json)** - API testing collection
-- **[Architecture Guide](docs/architecture.md)** - System design and patterns
-- **[Deployment Guide](docs/deployment.md)** - Production deployment instructions
-- **[Development Guide](docs/development.md)** - Development setup and workflow
-- **[Security Review](docs/SECURITY_CODE_REVIEW_REPORT.md)** - Security assessment report
+### Tenant Resolution Strategy
 
-## Development
+The system uses a hierarchical tenant resolution approach:
 
-### Development Script
+1. **Explicit Tenant ID**: Direct UUID or domain in request
+2. **Subdomain Detection**: `subdomain.sprout.com` → `subdomain`
+3. **Email Domain Extraction**: `user@company.com` → `company.com`
+4. **Auto Tenant Creation**: New tenants created automatically from domains
 
-Use the included `dev.sh` script for common development tasks:
+### Tenant Isolation
 
+- **Database Level**: All queries include `WHERE tenant_id = ?`
+- **JWT Claims**: Tokens contain `tenant_id` for stateless verification
+- **Middleware Enforcement**: `TenantRequired` middleware injects tenant context
+- **Storage Isolation**: Frontend uses tenant-specific localStorage keys
+
+### Security Boundaries
+
+- **Data Isolation**: Users can only access data from their tenant
+- **Session Scoping**: Sessions are tenant-specific
+- **Token Validation**: JWT claims verified for tenant ownership
+- **Admin Restrictions**: Admins can only manage users in their tenant
+
+## Development Setup
+
+### Prerequisites
+
+- Go 1.23+
+- Node.js 18+
+- PostgreSQL 13+
+- Redis 6+
+- Docker & Docker Compose
+
+### Local Development
+
+1. **Clone the repository**
 ```bash
-# Start development environment with live reload
+git clone <repository-url>
+cd auth-service
+```
+
+2. **Environment Configuration**
+```bash
+cp .env.example .env
+# Edit .env with your local configuration
+```
+
+3. **Start Development Environment**
+```bash
+# Start all services with hot reload
 ./dev.sh dev
 
-# Start in background
+# Or start in background
 ./dev.sh dev-d
+```
 
-# Stop development environment
-./dev.sh stop
+4. **Database Setup**
+The application automatically:
+- Creates PostgreSQL database
+- Runs GORM migrations
+- Seeds initial data (default tenants)
 
-# Run tests
+5. **Frontend Development**
+```bash
+cd frontend
+yarn install
+yarn start
+```
+
+### Testing
+
+```bash
+# Run all tests with isolated databases
 ./dev.sh test
 
-# View logs
-./dev.sh logs
-
-# Open shell in container
-./dev.sh shell
-
-# Clean up (removes containers and volumes)
-./dev.sh clean
-```
-
-### Running Tests
-
-The project includes comprehensive testing with isolated databases:
-
-```bash
-# Run all tests
-docker-compose -f docker-compose.test.yml up --abort-on-container-exit
-
 # Run specific test types
-docker-compose -f docker-compose.test.yml run --rm auth-service-test go test ./tests/unit/... -v
-docker-compose -f docker-compose.test.yml run --rm auth-service-test go test ./tests/feature/... -v
-
-# Run tests locally (requires Go and PostgreSQL)
-go test ./tests/... -v
+go test ./tests/unit/... -v     # Unit tests
+go test ./tests/feature/... -v  # Integration tests
 ```
 
-### Database Seeding
-
-The application automatically seeds development data on startup:
-
-- **Tenants**: Default, Demo, and Test organizations
-- **Users**: Admin, Student, and RTO accounts for each tenant
-- **Sessions**: Sample session data for testing
-
-### Building for Production
+### Development Commands
 
 ```bash
-# Build the application
-go build -o auth-service ./cmd/server
-
-# Build Docker image
-docker build -t auth-service .
-
-# Run container
-docker run -p 8080:8080 auth-service
+./dev.sh dev      # Start with live reload
+./dev.sh dev-d    # Start in background
+./dev.sh stop     # Stop containers
+./dev.sh logs     # View logs
+./dev.sh shell    # Open container shell
+./dev.sh clean    # Remove containers and volumes
 ```
 
 ## Deployment
 
-### Docker Deployment
-```bash
-docker build -t auth-service .
-docker run -p 8080:8080 auth-service
+### Production Configuration
+
+1. **Environment Variables**
+```env
+ENVIRONMENT=production
+GIN_MODE=release
+DATABASE_URL=postgresql://user:pass@host:5432/db
+REDIS_URL=redis://host:6379
+JWT_SECRET=your-secret-key
 ```
 
-### Kubernetes
-Use the provided Kubernetes manifests in the `k8s/` directory for production deployment.
+2. **Security Considerations**
+- Use strong, unique JWT secrets
+- Configure CORS for production domains
+- Enable CSRF protection
+- Set up proper SSL/TLS
+- Configure rate limiting
+- Enable audit logging
 
-## Health Checks
+3. **Database Migration**
+```bash
+# Migrations run automatically on startup
+# For manual migration in production:
+go run cmd/server/main.go --migrate-only
+```
 
-The service provides health check endpoints:
+4. **Health Checks**
+```bash
+# Health endpoint
+GET /health
 
-- `GET /health` - General health check
-- Returns database and Redis connectivity status
+# Response
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "database": "connected",
+    "redis": "connected",
+    "uptime": "1h 30m"
+  }
+}
+```
 
-## Monitoring
+### Docker Deployment
 
-- Structured logging with request IDs
-- Health check endpoints for load balancers
-- Error tracking and reporting
-- Performance metrics collection
+```yaml
+# docker-compose.prod.yml
+version: '3.8'
+services:
+  auth-service:
+    image: auth-service:latest
+    environment:
+      - ENVIRONMENT=production
+      - GIN_MODE=release
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
 
-## Contributing
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=auth_db
+      - POSTGRES_USER=auth_user
+      - POSTGRES_PASSWORD=secure_password
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+  redis:
+    image: redis:6-alpine
+```
 
-## License
+### Monitoring & Observability
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **Health Checks**: `/health` endpoint for load balancer
+- **Logging**: Structured logging with request IDs
+- **Metrics**: Database connection pools, request latency
+- **Alerts**: Failed login attempts, account lockouts
+
+## Security Features
+
+### Authentication Security
+- **Argon2id Password Hashing**: Memory-hard function resistant to attacks
+- **RSA-signed JWT Tokens**: Asymmetric signing for enhanced security
+- **Token Expiration**: Short-lived access tokens (1 hour) with refresh tokens (7 days)
+- **Secure Token Storage**: HTTP-only cookies recommended for production
+
+### Multi-Tenant Security
+- **Tenant Isolation**: Database-level row security
+- **Context Injection**: Tenant ID injected into every request context
+- **Ownership Validation**: All operations verify tenant ownership
+- **Session Scoping**: Sessions isolated per tenant
+
+### Protection Mechanisms
+- **CSRF Protection**: Double-submit cookie pattern
+- **Rate Limiting**: Request throttling by IP and endpoint
+- **Account Lockout**: Progressive delays after failed attempts
+- **Audit Logging**: Security events and admin actions logged
+- **Input Validation**: Comprehensive validation of all user inputs
+
+### Compliance Considerations
+- **Data Encryption**: Passwords hashed, sensitive data encrypted at rest
+- **Access Logging**: All authentication attempts logged
+- **Session Management**: Automatic cleanup of expired sessions
+- **GDPR Compliance**: User data export/deletion capabilities
+
+## Future Enhancements
+
+### Planned Features
+- **OAuth Integration**: Social login providers (Google, GitHub)
+- **MFA Support**: TOTP and SMS-based two-factor authentication
+- **Advanced Permissions**: Granular role-based access control
+- **Audit Trails**: Comprehensive user activity logging
+- **API Rate Limiting**: Per-user and per-endpoint limits
+- **Email Templates**: Customizable email notifications
+
+### Architecture Improvements
+- **Microservices Split**: Separate auth service from user management
+- **Event Sourcing**: Event-driven architecture for audit trails
+- **CQRS Pattern**: Separate read/write models for performance
+- **API Gateway**: Centralized request routing and authentication
+- **Service Mesh**: Istio for inter-service communication
+
+---
+
+This documentation provides a comprehensive overview of the Multi-Tenant Authentication Service. For specific implementation details, refer to the source code and inline documentation.

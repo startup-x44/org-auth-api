@@ -1,15 +1,24 @@
 import React from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import useAuthStore from '../../stores/authStore';
 import { Link, useNavigate } from 'react-router-dom';
+import { Button } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const Layout = ({ children }) => {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout } = useAuthStore();
+  const { error: showError } = useNotificationStore();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
-    await logout();
-    navigate('/login');
+    try {
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      showError('Failed to logout. Please try again.');
+    }
   };
+
+  const isSuperAdmin = user?.user_type === 'superadmin';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -18,7 +27,7 @@ const Layout = ({ children }) => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">
+              <h1 className="text-xl font-semibold text-foreground">
                 Auth Service
               </h1>
             </div>
@@ -28,14 +37,13 @@ const Layout = ({ children }) => {
                 Welcome, {user?.first_name || user?.email}
               </span>
 
-              <div className="relative">
-                <button
-                  onClick={handleLogout}
-                  className="btn btn-secondary text-sm"
-                >
-                  Logout
-                </button>
-              </div>
+              <Button
+                onClick={handleLogout}
+                variant="secondary"
+                size="sm"
+              >
+                Logout
+              </Button>
             </div>
           </div>
         </div>
@@ -62,12 +70,20 @@ const Layout = ({ children }) => {
                   Profile
                 </Link>
               </li>
+              <li>
+                <Link
+                  to="/organizations"
+                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                >
+                  Organizations
+                </Link>
+              </li>
 
-              {isAdmin() && (
+              {isSuperAdmin && (
                 <>
                   <li className="pt-4">
                     <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                      Admin
+                      Administration
                     </div>
                   </li>
                   <li>

@@ -21,9 +21,9 @@ func TestUser(tenantID uuid.UUID) *models.User {
 	return &models.User{
 		Email:        "test@example.com",
 		PasswordHash: "hashedpassword",
-		UserType:     "Admin",
-		TenantID:     tenantID,
-		Status:       models.UserStatusActive,
+		IsSuperadmin: false,
+		GlobalRole:   "user",
+		Status:       "active",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -34,9 +34,9 @@ func TestStudent(tenantID uuid.UUID) *models.User {
 	return &models.User{
 		Email:        "student@example.com",
 		PasswordHash: "hashedpassword",
-		UserType:     "Student",
-		TenantID:     tenantID,
-		Status:       models.UserStatusActive,
+		IsSuperadmin: false,
+		GlobalRole:   "user",
+		Status:       "active",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
@@ -47,8 +47,8 @@ func TestRTO(tenantID uuid.UUID) *models.User {
 	return &models.User{
 		Email:        "rto@example.com",
 		PasswordHash: "hashedpassword",
-		UserType:     "RTO",
-		TenantID:     tenantID,
+		IsSuperadmin: false,
+		GlobalRole:   "user",
 		Status:       models.UserStatusActive,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -59,7 +59,6 @@ func TestRTO(tenantID uuid.UUID) *models.User {
 func TestUserSession(userID, tenantID uuid.UUID) *models.UserSession {
 	return &models.UserSession{
 		UserID:    userID,
-		TenantID:  tenantID,
 		TokenHash: "sessiontoken",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
@@ -69,7 +68,6 @@ func TestUserSession(userID, tenantID uuid.UUID) *models.UserSession {
 func TestRefreshToken(userID, tenantID uuid.UUID) *models.RefreshToken {
 	return &models.RefreshToken{
 		UserID:    userID,
-		TenantID:  tenantID,
 		TokenHash: "refreshtoken",
 		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
 	}
@@ -79,7 +77,6 @@ func TestRefreshToken(userID, tenantID uuid.UUID) *models.RefreshToken {
 func TestPasswordReset(userID, tenantID uuid.UUID) *models.PasswordReset {
 	return &models.PasswordReset{
 		UserID:    userID,
-		TenantID:  tenantID,
 		TokenHash: "resettoken",
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
@@ -109,27 +106,27 @@ func TestUsers(tenantID uuid.UUID) []*models.User {
 		{
 			Email:        "admin@test.local",
 			PasswordHash: "hashedpassword1",
-			UserType:     "Admin",
-			TenantID:     tenantID,
-			Status:       models.UserStatusActive,
+			IsSuperadmin: false,
+			GlobalRole:   "user",
+			Status:       "active",
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 		},
 		{
 			Email:        "student@test.local",
 			PasswordHash: "hashedpassword2",
-			UserType:     "Student",
-			TenantID:     tenantID,
-			Status:       models.UserStatusActive,
+			IsSuperadmin: false,
+			GlobalRole:   "user",
+			Status:       "active",
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 		},
 		{
 			Email:        "rto@test.local",
 			PasswordHash: "hashedpassword3",
-			UserType:     "RTO",
-			TenantID:     tenantID,
-			Status:       models.UserStatusActive,
+			IsSuperadmin: false,
+			GlobalRole:   "user",
+			Status:       "active",
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 		},

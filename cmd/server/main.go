@@ -61,12 +61,14 @@ func main() {
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	adminHandler := handler.NewAdminHandler(authService)
+	organizationHandler := handler.NewOrganizationHandler(authService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
+	organizationMiddleware := middleware.NewOrganizationMiddleware(authService)
 
 	// Initialize Gin router
-	router := setupRouter(cfg, authHandler, adminHandler, authMiddleware)
+	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, authMiddleware, organizationMiddleware)
 
 	// Start server
 	srv := &http.Server{
@@ -146,7 +148,7 @@ func runSeeders(db *gorm.DB) error {
 	return seeder.Seed(ctx)
 }
 
-func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, authMiddleware *middleware.AuthMiddleware) *gin.Engine {
+func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware) *gin.Engine {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -185,7 +187,6 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		// Protected user routes
 		user := v1.Group("/user")
 		user.Use(authMiddleware.AuthRequired())
-		user.Use(authMiddleware.TenantRequired())
 		{
 			user.GET("/profile", authHandler.GetProfile)
 			user.PUT("/profile", authHandler.UpdateProfile)
@@ -193,24 +194,43 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			user.POST("/logout", authHandler.Logout)
 		}
 
-		// Protected admin routes
+		// Organization routes
+		org := v1.Group("/organizations")
+		org.Use(authMiddleware.AuthRequired())
+		{
+			org.POST("", organizationHandler.CreateOrganization)
+			org.GET("", organizationHandler.ListUserOrganizations)
+			org.GET("/:orgId", organizationMiddleware.MembershipRequired(""), organizationHandler.GetOrganization)
+
+			// Organization management (admin only)
+			org.PUT("/:orgId", organizationMiddleware.OrgAdminRequired(), organizationHandler.UpdateOrganization)
+			org.DELETE("/:orgId", organizationMiddleware.OrgAdminRequired(), organizationHandler.DeleteOrganization)
+
+			// Organization members
+			org.GET("/:orgId/members", organizationMiddleware.MembershipRequired(""), organizationHandler.ListOrganizationMembers)
+			org.POST("/:orgId/members", organizationMiddleware.OrgAdminRequired(), organizationHandler.InviteUser)
+			org.PUT("/:orgId/members/:userId", organizationMiddleware.OrgAdminRequired(), organizationHandler.UpdateMembership)
+			org.DELETE("/:orgId/members/:userId", organizationMiddleware.OrgAdminRequired(), organizationHandler.RemoveMember)
+
+			// Organization invitations
+			org.GET("/:orgId/invitations", organizationMiddleware.OrgAdminRequired(), organizationHandler.GetOrganizationInvitations)
+			org.DELETE("/:orgId/invitations/:invitationId", organizationMiddleware.OrgAdminRequired(), organizationHandler.CancelInvitation)
+		}
+
+		// Invitation acceptance (public route)
+		v1.POST("/invitations/:token/accept", organizationHandler.AcceptInvitation)
+		v1.GET("/invitations/:token", organizationHandler.GetInvitationDetails)
+
+		// Protected admin routes (superadmin only)
 		admin := v1.Group("/admin")
 		admin.Use(authMiddleware.AuthRequired())
 		admin.Use(authMiddleware.AdminRequired())
-		admin.Use(authMiddleware.TenantRequired())
 		{
-			// User management
+			// Global user management
 			admin.GET("/users", adminHandler.ListUsers)
 			admin.PUT("/users/:userId/activate", adminHandler.ActivateUser)
 			admin.PUT("/users/:userId/deactivate", adminHandler.DeactivateUser)
 			admin.DELETE("/users/:userId", adminHandler.DeleteUser)
-
-			// Tenant management
-			admin.POST("/tenants", adminHandler.CreateTenant)
-			admin.GET("/tenants", adminHandler.ListTenants)
-			admin.GET("/tenants/:tenantId", adminHandler.GetTenant)
-			admin.PUT("/tenants/:tenantId", adminHandler.UpdateTenant)
-			admin.DELETE("/tenants/:tenantId", adminHandler.DeleteTenant)
 		}
 	}
 

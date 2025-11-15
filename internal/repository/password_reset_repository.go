@@ -47,14 +47,14 @@ func (r *passwordResetRepository) GetByToken(ctx context.Context, token string) 
 	return &reset, err
 }
 
-// GetByEmail retrieves the latest password reset for an email and tenant
-func (r *passwordResetRepository) GetByEmail(ctx context.Context, email, tenantID string) (*models.PasswordReset, error) {
-	if email == "" || tenantID == "" {
-		return nil, errors.New("email and tenant ID are required")
+// GetByEmail retrieves the latest password reset for an email
+func (r *passwordResetRepository) GetByEmail(ctx context.Context, email string) (*models.PasswordReset, error) {
+	if email == "" {
+		return nil, errors.New("email is required")
 	}
 
 	var reset models.PasswordReset
-	err := r.db.WithContext(ctx).Where("email = ? AND tenant_id = ?", email, tenantID).Order("created_at DESC").First(&reset).Error
+	err := r.db.WithContext(ctx).Where("email = ?", email).Order("created_at DESC").First(&reset).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrPasswordResetNotFound
 	}

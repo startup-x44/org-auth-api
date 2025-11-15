@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import useAuthStore from '../../stores/authStore';
+import { Button, Input } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const Profile = () => {
-  const { user, updateProfile, changePassword } = useAuth();
+  const { user, updateProfile, changePassword } = useAuthStore();
+  const { success: showSuccess, error: showError } = useNotificationStore();
   const [activeTab, setActiveTab] = useState('profile');
   const [profileData, setProfileData] = useState({
     first_name: '',
@@ -15,8 +18,8 @@ const Profile = () => {
     confirm_password: '',
   });
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [profileErrors, setProfileErrors] = useState({});
+  const [passwordErrors, setPasswordErrors] = useState({});
 
   useEffect(() => {
     if (user) {
@@ -29,72 +32,126 @@ const Profile = () => {
   }, [user]);
 
   const handleProfileChange = (e) => {
+    const { name, value } = e.target;
     setProfileData({
       ...profileData,
-      [e.target.name]: e.target.value,
+      [name]: value,
     });
+    // Clear error when user starts typing
+    if (profileErrors[name]) {
+      setProfileErrors(prev => ({
+        ...prev,
+        [name]: undefined,
+      }));
+    }
   };
 
   const handlePasswordChange = (e) => {
+    const { name, value } = e.target;
     setPasswordData({
       ...passwordData,
-      [e.target.name]: e.target.value,
+      [name]: value,
     });
+    // Clear error when user starts typing
+    if (passwordErrors[name]) {
+      setPasswordErrors(prev => ({
+        ...prev,
+        [name]: undefined,
+      }));
+    }
+  };
+
+  const validateProfile = () => {
+    const errors = {};
+    if (!profileData.first_name.trim()) {
+      errors.first_name = 'First name is required';
+    }
+    if (!profileData.last_name.trim()) {
+      errors.last_name = 'Last name is required';
+    }
+    setProfileErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const validatePassword = () => {
+    const errors = {};
+    if (!passwordData.current_password) {
+      errors.current_password = 'Current password is required';
+    }
+    if (!passwordData.new_password) {
+      errors.new_password = 'New password is required';
+    } else if (passwordData.new_password.length < 8) {
+      errors.new_password = 'Password must be at least 8 characters';
+    }
+    if (!passwordData.confirm_password) {
+      errors.confirm_password = 'Please confirm your new password';
+    } else if (passwordData.new_password !== passwordData.confirm_password) {
+      errors.confirm_password = 'Passwords do not match';
+    }
+    setPasswordErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   const handleProfileSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setMessage('');
-    setError('');
 
-    const result = await updateProfile(profileData);
-
-    if (result.success) {
-      setMessage('Profile updated successfully!');
-    } else {
-      setError(result.message);
+    if (!validateProfile()) {
+      return;
     }
 
-    setLoading(false);
+    setLoading(true);
+
+    try {
+      const result = await updateProfile(profileData);
+
+      if (result.success) {
+        showSuccess('Profile updated successfully!');
+      } else {
+        showError(result.message);
+      }
+    } catch (err) {
+      showError('Failed to update profile. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setMessage('');
-    setError('');
 
-    if (passwordData.new_password !== passwordData.confirm_password) {
-      setError('New passwords do not match');
-      setLoading(false);
+    if (!validatePassword()) {
       return;
     }
 
-    const result = await changePassword({
-      current_password: passwordData.current_password,
-      new_password: passwordData.new_password,
-      confirm_password: passwordData.confirm_password,
-    });
+    setLoading(true);
 
-    if (result.success) {
-      setMessage('Password changed successfully!');
-      setPasswordData({
-        current_password: '',
-        new_password: '',
-        confirm_password: '',
+    try {
+      const result = await changePassword({
+        current_password: passwordData.current_password,
+        new_password: passwordData.new_password,
       });
-    } else {
-      setError(result.message);
-    }
 
-    setLoading(false);
+      if (result.success) {
+        showSuccess('Password changed successfully!');
+        setPasswordData({
+          current_password: '',
+          new_password: '',
+          confirm_password: '',
+        });
+      } else {
+        showError(result.message);
+      }
+    } catch (err) {
+      showError('Failed to change password. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
+  <h1 className="text-2xl font-bold text-foreground">Profile Settings</h1>
         <p className="text-gray-600">Manage your account settings and preferences.</p>
       </div>
 
@@ -105,7 +162,7 @@ const Profile = () => {
             onClick={() => setActiveTab('profile')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'profile'
-                ? 'border-primary-500 text-primary-600'
+                ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
@@ -115,7 +172,7 @@ const Profile = () => {
             onClick={() => setActiveTab('password')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'password'
-                ? 'border-primary-500 text-primary-600'
+                ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
@@ -124,152 +181,116 @@ const Profile = () => {
         </nav>
       </div>
 
-      {/* Messages */}
-      {message && (
-        <div className="bg-success bg-opacity-10 border border-success border-opacity-20 text-success px-4 py-3 rounded-md">
-          {message}
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-error bg-opacity-10 border border-error border-opacity-20 text-error px-4 py-3 rounded-md">
-          {error}
-        </div>
-      )}
-
       {/* Profile Tab */}
       {activeTab === 'profile' && (
-        <div className="card">
-          <h2 className="text-xl font-semibold text-gray-900 mb-6">Profile Information</h2>
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h2 className="text-xl font-semibold text-foreground mb-6">Profile Information</h2>
 
-          <form onSubmit={handleProfileSubmit} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="first_name" className="block text-sm font-medium text-gray-700">
-                  First Name
-                </label>
-                <input
-                  type="text"
-                  id="first_name"
+            <form onSubmit={handleProfileSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Input
+                  label="First Name"
                   name="first_name"
+                  type="text"
+                  required
+                  placeholder="Enter your first name"
                   value={profileData.first_name}
                   onChange={handleProfileChange}
-                  className="input mt-1"
-                  placeholder="Enter your first name"
+                  error={profileErrors.first_name}
                 />
-              </div>
 
-              <div>
-                <label htmlFor="last_name" className="block text-sm font-medium text-gray-700">
-                  Last Name
-                </label>
-                <input
-                  type="text"
-                  id="last_name"
+                <Input
+                  label="Last Name"
                   name="last_name"
+                  type="text"
+                  required
+                  placeholder="Enter your last name"
                   value={profileData.last_name}
                   onChange={handleProfileChange}
-                  className="input mt-1"
-                  placeholder="Enter your last name"
+                  error={profileErrors.last_name}
                 />
               </div>
-            </div>
 
-            <div>
-              <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
-                Phone Number
-              </label>
-              <input
-                type="tel"
-                id="phone"
+              <Input
+                label="Phone Number"
                 name="phone"
+                type="tel"
+                placeholder="Enter your phone number"
                 value={profileData.phone}
                 onChange={handleProfileChange}
-                className="input mt-1"
-                placeholder="Enter your phone number"
+                error={profileErrors.phone}
               />
-            </div>
 
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={loading}
-                className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? 'Updating...' : 'Update Profile'}
-              </button>
-            </div>
-          </form>
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={loading}
+                >
+                  Update Profile
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
       {/* Password Tab */}
       {activeTab === 'password' && (
-        <div className="card">
-          <h2 className="text-xl font-semibold text-gray-900 mb-6">Change Password</h2>
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h2 className="text-xl font-semibold text-foreground mb-6">Change Password</h2>
 
-          <form onSubmit={handlePasswordSubmit} className="space-y-6">
-            <div>
-              <label htmlFor="current_password" className="block text-sm font-medium text-gray-700">
-                Current Password
-              </label>
-              <input
-                type="password"
-                id="current_password"
+            <form onSubmit={handlePasswordSubmit} className="space-y-6">
+              <Input
+                label="Current Password"
                 name="current_password"
+                type="password"
+                required
+                placeholder="Enter your current password"
                 value={passwordData.current_password}
                 onChange={handlePasswordChange}
-                required
-                className="input mt-1"
-                placeholder="Enter your current password"
+                error={passwordErrors.current_password}
               />
-            </div>
 
-            <div>
-              <label htmlFor="new_password" className="block text-sm font-medium text-gray-700">
-                New Password
-              </label>
-              <input
-                type="password"
-                id="new_password"
+              <Input
+                label="New Password"
                 name="new_password"
+                type="password"
+                required
+                placeholder="Enter your new password"
                 value={passwordData.new_password}
                 onChange={handlePasswordChange}
-                required
-                className="input mt-1"
-                placeholder="Enter your new password"
+                error={passwordErrors.new_password}
               />
-              <p className="mt-1 text-sm text-gray-500">
-                Password must be at least 8 characters with uppercase, lowercase, number, and special character.
-              </p>
-            </div>
 
-            <div>
-              <label htmlFor="confirm_password" className="block text-sm font-medium text-gray-700">
-                Confirm New Password
-              </label>
-              <input
-                type="password"
-                id="confirm_password"
+              <Input
+                label="Confirm New Password"
                 name="confirm_password"
+                type="password"
+                required
+                placeholder="Confirm your new password"
                 value={passwordData.confirm_password}
                 onChange={handlePasswordChange}
-                required
-                className="input mt-1"
-                placeholder="Confirm your new password"
+                error={passwordErrors.confirm_password}
               />
-            </div>
 
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={loading}
-                className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? 'Changing...' : 'Change Password'}
-              </button>
-            </div>
-          </form>
+              <div className="text-sm text-gray-500">
+                Password must be at least 8 characters with uppercase, lowercase, number, and special character.
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={loading}
+                >
+                  Change Password
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

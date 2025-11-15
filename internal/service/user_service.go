@@ -30,7 +30,7 @@ type UserService interface {
 	ChangePassword(ctx context.Context, userID string, req *ChangePasswordRequest) error
 	ForgotPassword(ctx context.Context, req *ForgotPasswordRequest) error
 	ResetPassword(ctx context.Context, req *ResetPasswordRequest) error
-	ListUsers(ctx context.Context, tenantID string, limit int, cursor string) (*UserListResponse, error)
+	ListUsers(ctx context.Context, limit int, cursor string) (*UserListResponse, error)
 	ActivateUser(ctx context.Context, userID string) error
 	DeactivateUser(ctx context.Context, userID string) error
 	DeleteUser(ctx context.Context, userID string) error
@@ -46,9 +46,6 @@ type RegisterRequest struct {
 	Email           string `json:"email"`
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
-	UserType        string `json:"user_type"`
-	TenantID        string `json:"tenant_id,omitempty"`        // UUID or domain
-	TenantSubdomain string `json:"tenant_subdomain,omitempty"` // NEW: For subdomain-based tenancy
 	FirstName       string `json:"first_name,omitempty"`
 	LastName        string `json:"last_name,omitempty"`
 	Phone           string `json:"phone,omitempty"`
@@ -64,8 +61,6 @@ type RegisterResponse struct {
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-	TenantID string `json:"tenant_id"`
-	UserType string `json:"user_type,omitempty"`
 }
 
 // LoginResponse represents user login response
@@ -121,8 +116,7 @@ type ChangePasswordRequest struct {
 
 // ForgotPasswordRequest represents forgot password request
 type ForgotPasswordRequest struct {
-	Email    string `json:"email"`
-	TenantID string `json:"tenant_id"`
+	Email string `json:"email"`
 }
 
 // ResetPasswordRequest represents password reset request
@@ -194,14 +188,8 @@ func (s *userService) Register(ctx context.Context, req *RegisterRequest) (*Regi
 		return nil, err
 	}
 
-	// Resolve tenant for user
-	tenantID, err := s.resolveTenantForRegistration(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
 	// Create user account
-	user, err := s.createUserAccount(ctx, req, tenantID)
+	user, err := s.createUserAccount(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -227,8 +215,14 @@ func (s *userService) Register(ctx context.Context, req *RegisterRequest) (*Regi
 // validateRegistrationRequest validates the registration request data
 func (s *userService) validateRegistrationRequest(req *RegisterRequest) error {
 	// Validate core registration fields
-	if err := validation.ValidateUserRegistration(req.Email, req.Password, req.ConfirmPassword, req.UserType, req.TenantID); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		return err
+	}
+	if err := validation.ValidatePassword(req.Password); err != nil {
+		return err
+	}
+	if err := validation.ValidatePasswordsMatch(req.Password, req.ConfirmPassword); err != nil {
+		return err
 	}
 
 	// Validate optional profile fields
@@ -261,18 +255,8 @@ func (s *userService) validateOptionalProfileFields(req *RegisterRequest) error 
 
 // resolveTenantForRegistration determines the tenant for the new user
 func (s *userService) resolveTenantForRegistration(ctx context.Context, req *RegisterRequest) (string, error) {
-	// Priority 1: Explicit tenant subdomain (e.g., "fligno")
-	if req.TenantSubdomain != "" {
-		return s.resolveTenantBySubdomain(ctx, req.TenantSubdomain)
-	}
-
-	// Priority 2: Explicit tenant ID/domain provided
-	if req.TenantID != "" {
-		return s.validateProvidedTenantID(ctx, req.TenantID)
-	}
-
-	// Priority 3: Auto-assign based on email domain (fallback)
-	return s.autoAssignTenantByEmailDomain(ctx, req.Email)
+	// Users are now global - no tenant resolution needed
+	return "", nil
 }
 
 // validateProvidedTenantID validates that a provided tenant ID exists and is active
@@ -342,7 +326,7 @@ func (s *userService) autoAssignTenantByEmailDomain(ctx context.Context, email s
 }
 
 // createUserAccount creates the user account with hashed password
-func (s *userService) createUserAccount(ctx context.Context, req *RegisterRequest, tenantID string) (*models.User, error) {
+func (s *userService) createUserAccount(ctx context.Context, req *RegisterRequest) (*models.User, error) {
 	// Hash password asynchronously for better performance
 	passwordHashChan := s.hashPasswordAsync(req.Password)
 	passwordHashResult := <-passwordHashChan
@@ -354,11 +338,12 @@ func (s *userService) createUserAccount(ctx context.Context, req *RegisterReques
 	user := &models.User{
 		Email:        req.Email,
 		PasswordHash: passwordHashResult.Hash,
-		UserType:     validation.NormalizeUserType(req.UserType),
-		TenantID:     uuid.MustParse(tenantID),
+		IsSuperadmin: false,
+		GlobalRole:   "user",
 		Firstname:    safeStringToPointer(req.FirstName),
 		Lastname:     safeStringToPointer(req.LastName),
 		Phone:        safeStringToPointer(req.Phone),
+		Status:       "active",
 	}
 
 	// Save user to database
@@ -374,7 +359,6 @@ func (s *userService) createUserSessionAndTokens(ctx context.Context, user *mode
 	// Create session
 	session := &models.UserSession{
 		UserID:    user.ID,
-		TenantID:  user.TenantID,
 		TokenHash: generateCryptographicallySecureToken(),
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
@@ -385,7 +369,6 @@ func (s *userService) createUserSessionAndTokens(ctx context.Context, user *mode
 	// Create refresh token
 	refreshToken := &models.RefreshToken{
 		UserID:    user.ID,
-		TenantID:  user.TenantID,
 		TokenHash: tokenPair.RefreshToken,
 		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
 	}
@@ -399,37 +382,18 @@ func (s *userService) createUserSessionAndTokens(ctx context.Context, user *mode
 // Login authenticates a user
 func (s *userService) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
 	// Validate request
-	if err := validation.ValidateLogin(req.Email, req.TenantID); err != nil {
+	if err := validation.ValidateEmail(req.Email); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Resolve tenant ID (could be domain or UUID)
-	resolvedTenantID, err := s.resolveTenantID(ctx, req.TenantID)
+	// Get user by email (users are now global)
+	user, err := s.repo.User().GetByEmail(ctx, req.Email)
 	if err != nil {
-		return nil, fmt.Errorf("invalid tenant: %w", err)
-	}
-
-	// Check if account is locked
-	clientIP := getClientIP(ctx)
-	if s.isAccountLocked(ctx, req.Email, clientIP, resolvedTenantID) {
-		return nil, errors.New("account is temporarily locked due to too many failed login attempts")
-	}
-
-	// Get user
-	var user *models.User
-	if req.UserType != "" {
-		user, err = s.repo.User().GetByEmailAndType(ctx, req.Email, req.UserType, resolvedTenantID)
-	} else {
-		user, err = s.repo.User().GetByEmail(ctx, req.Email, resolvedTenantID)
-	}
-	if err != nil {
-		// Record failed attempt for non-existent user
-		s.recordFailedAttempt(ctx, req.Email, clientIP, resolvedTenantID, nil)
 		return nil, fmt.Errorf("invalid credentials: %w", err)
 	}
 
 	// Check if user is active
-	if user.Status != models.UserStatusActive {
+	if user.Status != "active" {
 		return nil, errors.New("account is deactivated")
 	}
 
@@ -439,13 +403,8 @@ func (s *userService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 		return nil, errors.New("invalid credentials")
 	}
 	if !valid {
-		// Record failed attempt
-		s.recordFailedAttempt(ctx, req.Email, clientIP, resolvedTenantID, &user.ID)
 		return nil, errors.New("invalid credentials")
 	}
-
-	// Clear failed attempts on successful login
-	s.clearFailedAttempts(ctx, req.Email, clientIP, resolvedTenantID)
 
 	// Update last login
 	if err := s.repo.User().UpdateLastLogin(ctx, user.ID.String()); err != nil {
@@ -459,46 +418,19 @@ func (s *userService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 		return nil, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
-	// Enforce session limits if session service is available
-	if s.sessionSvc != nil {
-		maxSessions := 5 // Default max sessions per user
-		if err := s.sessionSvc.EnforceSessionLimits(ctx, user.ID.String(), maxSessions); err != nil {
-			return nil, fmt.Errorf("failed to enforce session limits: %w", err)
-		}
+	// Create session
+	session := &models.UserSession{
+		UserID:    user.ID,
+		TokenHash: generateCryptographicallySecureToken(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
-
-	// Create session using session service if available
-	var session *models.UserSession
-	if s.sessionSvc != nil {
-		session, err = s.sessionSvc.CreateSession(ctx, user.ID.String(), resolvedTenantID, clientIP, getUserAgent(ctx))
-		if err != nil {
-			fmt.Printf("Failed to create session: %v\n", err)
-		}
-
-		// Check for suspicious activity
-		if session != nil {
-			if suspicious, reasons := s.sessionSvc.DetectSuspiciousActivity(ctx, session); suspicious {
-				s.auditLogger.LogSecurityEvent("suspicious_login_detected", req.Email, clientIP, false, nil, fmt.Sprintf("Suspicious activity detected: %s", reasons))
-				// Optionally revoke the session or require additional verification
-			}
-		}
-	} else {
-		// Fallback to old session creation logic
-		session = &models.UserSession{
-			UserID:    user.ID,
-			TenantID:  user.TenantID,
-			TokenHash: generateCryptographicallySecureToken(),
-			ExpiresAt: time.Now().Add(24 * time.Hour),
-		}
-		if err := s.repo.UserSession().Create(ctx, session); err != nil {
-			fmt.Printf("Failed to create session: %v\n", err)
-		}
+	if err := s.repo.UserSession().Create(ctx, session); err != nil {
+		fmt.Printf("Failed to create session: %v\n", err)
 	}
 
 	// Create refresh token
 	refreshToken := &models.RefreshToken{
 		UserID:    user.ID,
-		TenantID:  user.TenantID,
 		TokenHash: tokenPair.RefreshToken,
 		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
 	}
@@ -692,18 +624,12 @@ func (s *userService) ChangePassword(ctx context.Context, userID string, req *Ch
 
 // ForgotPassword initiates password reset
 func (s *userService) ForgotPassword(ctx context.Context, req *ForgotPasswordRequest) error {
-	if err := validation.ValidateForgotPassword(req.Email, req.TenantID); err != nil {
+	if err := validation.ValidateEmail(req.Email); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Resolve tenant ID (could be domain or UUID)
-	resolvedTenantID, err := s.resolveTenantID(ctx, req.TenantID)
-	if err != nil {
-		return fmt.Errorf("invalid tenant: %w", err)
-	}
-
 	// Check if user exists
-	user, err := s.repo.User().GetByEmail(ctx, req.Email, resolvedTenantID)
+	user, err := s.repo.User().GetByEmail(ctx, req.Email)
 	if err != nil {
 		// Don't reveal if user exists or not for security
 		return nil
@@ -720,7 +646,6 @@ func (s *userService) ForgotPassword(ctx context.Context, req *ForgotPasswordReq
 	// Create password reset record
 	reset := &models.PasswordReset{
 		UserID:    user.ID,
-		TenantID:  user.TenantID,
 		TokenHash: resetToken,
 		ExpiresAt: time.Now().Add(15 * time.Minute), // 15 minutes
 	}
@@ -792,23 +717,20 @@ func (s *userService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 }
 
 // ListUsers lists users with cursor-based pagination
-func (s *userService) ListUsers(ctx context.Context, tenantID string, limit int, cursor string) (*UserListResponse, error) {
-	if tenantID == "" {
-		return nil, errors.New("tenant ID is required")
+func (s *userService) ListUsers(ctx context.Context, limit int, cursor string) (*UserListResponse, error) {
+	// For now, only superadmins can list all users
+	// TODO: Add organization-based filtering when organization context is available
+	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
+	if !isSuperadmin {
+		return nil, errors.New("insufficient permissions")
 	}
 
-	// Resolve tenant ID (could be domain or UUID)
-	resolvedTenantID, err := s.resolveTenantID(ctx, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid tenant: %w", err)
-	}
-
-	users, err := s.repo.User().List(ctx, resolvedTenantID, limit, cursor)
+	users, err := s.repo.User().List(ctx, limit, cursor)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
 
-	total, err := s.repo.User().Count(ctx, resolvedTenantID)
+	total, err := s.repo.User().Count(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count users: %w", err)
 	}
@@ -846,23 +768,13 @@ func (s *userService) ActivateUser(ctx context.Context, userID string) error {
 		return errors.New("user ID is required")
 	}
 
-	// Get tenant ID from context for security validation
-	tenantID := getTenantID(ctx)
-	if tenantID == "" {
-		return errors.New("tenant context required")
+	// Check superadmin permission
+	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
+	if !isSuperadmin {
+		return errors.New("superadmin permission required")
 	}
 
-	// Verify the user belongs to the authenticated tenant
-	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
-	}
-
-	if user.TenantID.String() != tenantID {
-		return errors.New("user does not belong to your tenant")
-	}
-
-	err = s.repo.User().Activate(ctx, userID)
+	err := s.repo.User().Activate(ctx, userID)
 	if err != nil {
 		s.auditLogger.LogAdminAction("system", "activate_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to activate user account")
 		return err
@@ -878,20 +790,10 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 		return errors.New("user ID is required")
 	}
 
-	// Get tenant ID from context for security validation
-	tenantID := getTenantID(ctx)
-	if tenantID == "" {
-		return errors.New("tenant context required")
-	}
-
-	// Verify the user belongs to the authenticated tenant
-	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
-	}
-
-	if user.TenantID.String() != tenantID {
-		return errors.New("user does not belong to your tenant")
+	// Check superadmin permission
+	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
+	if !isSuperadmin {
+		return errors.New("superadmin permission required")
 	}
 
 	// Invalidate all sessions and refresh tokens
@@ -902,7 +804,7 @@ func (s *userService) DeactivateUser(ctx context.Context, userID string) error {
 		fmt.Printf("Failed to delete refresh tokens: %v\n", err)
 	}
 
-	err = s.repo.User().Deactivate(ctx, userID)
+	err := s.repo.User().Deactivate(ctx, userID)
 	if err != nil {
 		s.auditLogger.LogAdminAction("system", "deactivate_user", "user", userID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to deactivate user account")
 		return err
@@ -918,20 +820,10 @@ func (s *userService) DeleteUser(ctx context.Context, userID string) error {
 		return errors.New("user ID is required")
 	}
 
-	// Get tenant ID from context for security validation
-	tenantID := getTenantID(ctx)
-	if tenantID == "" {
-		return errors.New("tenant context required")
-	}
-
-	// Verify the user belongs to the authenticated tenant
-	user, err := s.repo.User().GetByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
-	}
-
-	if user.TenantID.String() != tenantID {
-		return errors.New("user does not belong to your tenant")
+	// Check superadmin permission
+	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
+	if !isSuperadmin {
+		return errors.New("superadmin permission required")
 	}
 
 	// Start transaction
@@ -1030,8 +922,8 @@ func (s *userService) convertToUserProfile(user *models.User) *UserProfile {
 	profile := &UserProfile{
 		ID:        user.ID.String(),
 		Email:     user.Email,
-		UserType:  user.UserType,
-		TenantID:  user.TenantID.String(),
+		UserType:  "user", // Default user type for global users
+		TenantID:  "",     // No tenant for global users
 		FirstName: safeStringDereference(user.Firstname),
 		LastName:  safeStringDereference(user.Lastname),
 		Phone:     safeStringDereference(user.Phone),
@@ -1121,31 +1013,30 @@ const (
 )
 
 // isAccountLocked checks if an account is currently locked
-func (s *userService) isAccountLocked(ctx context.Context, email, ipAddress, tenantID string) bool {
+func (s *userService) isAccountLocked(ctx context.Context, email, ipAddress string) bool {
 	if s.redisClient == nil {
 		// Fallback to database-based lockout
-		return s.isAccountLockedDB(ctx, email, ipAddress, tenantID)
+		return s.isAccountLockedDB(ctx, email, ipAddress)
 	}
 
 	// Check Redis for lockout
-	lockKey := fmt.Sprintf("lockout:%s:%s:%s", email, ipAddress, tenantID)
+	lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
 	exists, err := s.redisClient.Exists(ctx, lockKey).Result()
 	return err == nil && exists > 0
 }
 
 // isAccountLockedDB checks account lockout using database
-func (s *userService) isAccountLockedDB(ctx context.Context, email, ipAddress, tenantID string) bool {
+func (s *userService) isAccountLockedDB(ctx context.Context, email, ipAddress string) bool {
 	since := time.Now().Add(-FailedAttemptWindow)
-	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, tenantID, since)
+	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, since)
 	return err == nil && count >= MaxFailedAttempts
 }
 
 // recordFailedAttempt records a failed login attempt
-func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress, tenantID string, userID *uuid.UUID) {
+func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress string, userID *uuid.UUID) {
 	// Record in database
 	attempt := &models.FailedLoginAttempt{
 		UserID:      userID,
-		TenantID:    uuid.MustParse(tenantID),
 		Email:       email,
 		IPAddress:   ipAddress,
 		UserAgent:   getUserAgent(ctx),
@@ -1158,32 +1049,32 @@ func (s *userService) recordFailedAttempt(ctx context.Context, email, ipAddress,
 
 	// Check if we should lock the account
 	since := time.Now().Add(-FailedAttemptWindow)
-	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, tenantID, since)
+	count, err := s.repo.FailedLoginAttempt().CountByEmailAndIP(ctx, email, ipAddress, since)
 	if err == nil && count >= MaxFailedAttempts {
-		s.lockAccount(ctx, email, ipAddress, tenantID)
+		s.lockAccount(ctx, email, ipAddress)
 	}
 }
 
 // lockAccount locks an account for a period of time
-func (s *userService) lockAccount(ctx context.Context, email, ipAddress, tenantID string) {
+func (s *userService) lockAccount(ctx context.Context, email, ipAddress string) {
 	if s.redisClient == nil {
 		// No Redis, just log that account would be locked
 		fmt.Printf("Account locked for email %s from IP %s\n", email, ipAddress)
 		return
 	}
 
-	lockKey := fmt.Sprintf("lockout:%s:%s:%s", email, ipAddress, tenantID)
+	lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
 	if err := s.redisClient.Set(ctx, lockKey, "locked", LockoutDuration).Err(); err != nil {
 		fmt.Printf("Failed to set account lockout in Redis: %v\n", err)
 	}
 }
 
 // clearFailedAttempts clears failed attempts for successful login
-func (s *userService) clearFailedAttempts(ctx context.Context, email, ipAddress, tenantID string) {
+func (s *userService) clearFailedAttempts(ctx context.Context, email, ipAddress string) {
 	// Clear from database (cleanup will happen periodically)
 	// For now, just clear Redis if available
 	if s.redisClient != nil {
-		lockKey := fmt.Sprintf("lockout:%s:%s:%s", email, ipAddress, tenantID)
+		lockKey := fmt.Sprintf("lockout:%s:%s", email, ipAddress)
 		s.redisClient.Del(ctx, lockKey)
 	}
 }

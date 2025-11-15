@@ -1,35 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
-import { resolveTenant } from '../../utils/tenant';
+import useAuthStore from '../../stores/authStore';
+import { Button, Input, Loading } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const Login = () => {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    tenant_id: '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [resolvedTenant, setResolvedTenant] = useState('');
 
-  const { login } = useAuth();
+  const { login } = useAuthStore();
+  const { error: showError } = useNotificationStore();
   const navigate = useNavigate();
-
-  // Auto-resolve tenant on component mount and email change
-  useEffect(() => {
-    const tenant = resolveTenant(formData.email);
-    if (tenant) {
-      setResolvedTenant(tenant);
-      setFormData(prev => ({ ...prev, tenant_id: tenant }));
-    }
-  }, [formData.email]);
 
   const handleChange = (e) => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value,
     });
+    // Clear error when user starts typing
+    if (error) setError('');
   };
 
   const handleSubmit = async (e) => {
@@ -37,29 +30,33 @@ const Login = () => {
     setLoading(true);
     setError('');
 
-    // Validate tenant is resolved
-    if (!formData.tenant_id) {
-      setError('Unable to determine tenant. Please contact support.');
+    try {
+      const result = await login(formData.email, formData.password);
+
+      if (result.success) {
+        navigate('/dashboard');
+      } else {
+        setError(result.message);
+        showError(result.message);
+      }
+    } catch (err) {
+      const errorMessage = 'An unexpected error occurred. Please try again.';
+      setError(errorMessage);
+      showError(errorMessage);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const result = await login(formData.email, formData.password, formData.tenant_id);
-
-    if (result.success) {
-      navigate('/dashboard');
-    } else {
-      setError(result.message);
-    }
-
-    setLoading(false);
   };
+
+  if (loading) {
+    return <Loading fullScreen text="Signing you in..." />;
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
             Sign in to your account
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
@@ -80,46 +77,28 @@ const Login = () => {
             </div>
           )}
 
-          {resolvedTenant && (
-            <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-              <div className="text-sm text-blue-800">
-                <strong>Organization:</strong> {resolvedTenant}
-              </div>
-            </div>
-          )}
-
           <div className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email Address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                className="input mt-1"
-                placeholder="Enter your email"
-                value={formData.email}
-                onChange={handleChange}
-              />
-            </div>
+            <Input
+              label="Email Address"
+              name="email"
+              type="email"
+              required
+              placeholder="Enter your email"
+              value={formData.email}
+              onChange={handleChange}
+              error={error && !formData.email ? 'Email is required' : ''}
+            />
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                className="input mt-1"
-                placeholder="Enter your password"
-                value={formData.password}
-                onChange={handleChange}
-              />
-            </div>
+            <Input
+              label="Password"
+              name="password"
+              type="password"
+              required
+              placeholder="Enter your password"
+              value={formData.password}
+              onChange={handleChange}
+              error={error && !formData.password ? 'Password is required' : ''}
+            />
           </div>
 
           <div className="flex items-center justify-between">
@@ -134,13 +113,14 @@ const Login = () => {
           </div>
 
           <div>
-            <button
+            <Button
               type="submit"
-              disabled={loading}
-              className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              variant="primary"
+              className="w-full"
+              loading={loading}
             >
-              {loading ? 'Signing in...' : 'Sign in'}
-            </button>
+              Sign in
+            </Button>
           </div>
         </form>
       </div>

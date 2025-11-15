@@ -13,6 +13,7 @@ import (
 type AuthService interface {
 	UserService() UserService
 	TenantService() TenantService
+	OrganizationService() OrganizationService
 	SessionService() SessionService
 	BackgroundJobService() BackgroundJobService
 	ValidateToken(ctx context.Context, token string) (*TokenClaims, error)
@@ -21,9 +22,10 @@ type AuthService interface {
 
 // TokenClaims represents JWT token claims
 type TokenClaims struct {
-	UserID   string `json:"user_id"`
-	UserType string `json:"user_type"`
-	TenantID string `json:"tenant_id"`
+	UserID       string  `json:"user_id"`
+	Email        string  `json:"email"`
+	IsSuperadmin bool    `json:"is_superadmin"`
+	CurrentOrgID *string `json:"current_org_id,omitempty"`
 }
 
 // HealthCheckResponse represents health check response
@@ -36,23 +38,24 @@ type HealthCheckResponse struct {
 
 // authService implements AuthService interface
 type authService struct {
-	userService   UserService
-	tenantService TenantService
-	sessionSvc    SessionService
-	jobSvc        BackgroundJobService
-	jwtService    *jwt.Service
-	repo          repository.Repository
+	userService         UserService
+	tenantService       TenantService
+	organizationService OrganizationService
+	sessionSvc          SessionService
+	jobSvc              BackgroundJobService
+	jwtService          *jwt.Service
+	repo                repository.Repository
 }
 
 // NewAuthService creates a new auth service
 func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwordService *password.Service) AuthService {
 	// Create session service
 	sessionConfig := &SessionConfig{
-		MaxSessionsPerUser:         5,
-		SessionTimeout:             24 * time.Hour,
-		MaxInactiveTime:            7 * 24 * time.Hour,
-		EnableGeoTracking:          true,
-		EnableDeviceTracking:       true,
+		MaxSessionsPerUser:          5,
+		SessionTimeout:              24 * time.Hour,
+		MaxInactiveTime:             7 * 24 * time.Hour,
+		EnableGeoTracking:           true,
+		EnableDeviceTracking:        true,
 		SuspiciousActivityThreshold: 3,
 	}
 	sessionSvc := NewSessionService(repo, sessionConfig)
@@ -71,12 +74,13 @@ func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwor
 	userSvc.SetSessionService(sessionSvc)
 
 	return &authService{
-		userService:   userSvc,
-		tenantService: NewTenantService(repo),
-		sessionSvc:    sessionSvc,
-		jobSvc:        jobSvc,
-		jwtService:    jwtService,
-		repo:          repo,
+		userService:         userSvc,
+		tenantService:       NewTenantService(repo),
+		organizationService: NewOrganizationService(repo),
+		sessionSvc:          sessionSvc,
+		jobSvc:              jobSvc,
+		jwtService:          jwtService,
+		repo:                repo,
 	}
 }
 
@@ -88,6 +92,11 @@ func (s *authService) UserService() UserService {
 // TenantService returns the tenant service
 func (s *authService) TenantService() TenantService {
 	return s.tenantService
+}
+
+// OrganizationService returns the organization service
+func (s *authService) OrganizationService() OrganizationService {
+	return s.organizationService
 }
 
 // SessionService returns the session service
@@ -108,9 +117,9 @@ func (s *authService) ValidateToken(ctx context.Context, token string) (*TokenCl
 	}
 
 	return &TokenClaims{
-		UserID:   claims.UserID.String(),
-		UserType: claims.UserType,
-		TenantID: claims.TenantID.String(),
+		UserID:       claims.UserID.String(),
+		Email:        claims.Email,
+		IsSuperadmin: claims.IsSuperadmin,
 	}, nil
 }
 

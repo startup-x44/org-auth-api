@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import useAuthStore from './stores/authStore';
+import { NotificationContainer } from './components/shared';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
 import ForgotPassword from './components/auth/ForgotPassword';
@@ -13,10 +14,10 @@ import Layout from './components/layout/Layout';
 import './App.css';
 
 // Protected Route component
-const ProtectedRoute = ({ children, adminOnly = false }) => {
-  const { isAuthenticated, isAdmin, loading } = useAuth();
+const ProtectedRoute = ({ children, adminOnly = false, superAdminOnly = false }) => {
+  const { isAuthenticated, user, isLoading } = useAuthStore();
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
@@ -24,11 +25,15 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
     );
   }
 
-  if (!isAuthenticated()) {
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  if (adminOnly && !isAdmin()) {
+  if (superAdminOnly && user?.user_type !== 'superadmin') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  if (adminOnly && !['admin', 'superadmin'].includes(user?.user_type)) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -68,11 +73,26 @@ const AppRoutes = () => {
         }
       />
 
+      {/* Organization routes - placeholder for future implementation */}
+      <Route
+        path="/organizations"
+        element={
+          <ProtectedRoute>
+            <Layout>
+              <div className="p-6">
+                <h1 className="text-2xl font-bold text-foreground">Organizations</h1>
+                <p className="mt-2 text-gray-600">Organization management coming soon...</p>
+              </div>
+            </Layout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Admin routes */}
       <Route
         path="/admin/users"
         element={
-          <ProtectedRoute adminOnly>
+          <ProtectedRoute superAdminOnly>
             <Layout>
               <AdminUsers />
             </Layout>
@@ -83,7 +103,7 @@ const AppRoutes = () => {
       <Route
         path="/admin/tenants"
         element={
-          <ProtectedRoute adminOnly>
+          <ProtectedRoute superAdminOnly>
             <Layout>
               <AdminTenants />
             </Layout>
@@ -101,13 +121,12 @@ const AppRoutes = () => {
 // Main App component
 function App() {
   return (
-    <AuthProvider>
-      <Router>
-        <div className="App">
-          <AppRoutes />
-        </div>
-      </Router>
-    </AuthProvider>
+    <Router>
+      <div className="App">
+        <AppRoutes />
+        <NotificationContainer />
+      </div>
+    </Router>
   );
 }
 

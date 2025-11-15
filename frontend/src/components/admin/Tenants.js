@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { adminAPI } from '../../services/api';
+import useAdminStore from '../../stores/adminStore';
+import { Button, Input, Loading, ConfirmModal } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const AdminTenants = () => {
-  const [tenants, setTenants] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { tenants, isLoading, fetchTenants, createTenant, updateTenant, deleteTenant } = useAdminStore();
+  const { success: showSuccess, error: showError } = useNotificationStore();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
   const [pagination, setPagination] = useState({
@@ -15,75 +17,110 @@ const AdminTenants = () => {
     name: '',
     domain: '',
   });
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [formErrors, setFormErrors] = useState({});
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    action: null,
+    loading: false,
+  });
 
-  const fetchTenants = useCallback(async () => {
+  const loadTenants = useCallback(async () => {
     try {
-      setLoading(true);
-      const response = await adminAPI.listTenants({
+      await fetchTenants({
         limit: pagination.limit,
         offset: pagination.offset,
       });
-
-      setTenants(response.data.data.tenants);
-      setPagination(prev => ({
-        ...prev,
-        total: response.data.data.total,
-      }));
     } catch (err) {
-      setError('Failed to fetch tenants');
-      console.error('Error fetching tenants:', err);
-    } finally {
-      setLoading(false);
+      showError('Failed to fetch tenants');
     }
-  }, [pagination.limit, pagination.offset]);
+  }, [pagination.limit, pagination.offset, fetchTenants, showError]);
 
   useEffect(() => {
-    fetchTenants();
-  }, [fetchTenants]);
+    loadTenants();
+  }, [loadTenants]);
+
+  const validateForm = () => {
+    const errors = {};
+    if (!formData.name.trim()) {
+      errors.name = 'Tenant name is required';
+    }
+    if (!formData.domain.trim()) {
+      errors.domain = 'Domain is required';
+    } else if (!/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(formData.domain)) {
+      errors.domain = 'Please enter a valid domain';
+    }
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleCreateTenant = async (e) => {
     e.preventDefault();
+
+    if (!validateForm()) {
+      return;
+    }
+
     try {
-      await adminAPI.createTenant(formData);
-      setMessage('Tenant created successfully');
-      setShowCreateForm(false);
-      setFormData({ name: '', domain: '' });
-      fetchTenants();
+      const result = await createTenant(formData);
+      if (result.success) {
+        showSuccess('Tenant created successfully');
+        setShowCreateForm(false);
+        setFormData({ name: '', domain: '' });
+        loadTenants();
+      } else {
+        showError(result.message);
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to create tenant');
-      console.error('Error creating tenant:', err);
+      showError('Failed to create tenant');
     }
   };
 
   const handleUpdateTenant = async (e) => {
     e.preventDefault();
-    try {
-      await adminAPI.updateTenant(editingTenant.id, formData);
-      setMessage('Tenant updated successfully');
-      setEditingTenant(null);
-      setFormData({ name: '', domain: '' });
-      fetchTenants();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to update tenant');
-      console.error('Error updating tenant:', err);
-    }
-  };
 
-  const handleDeleteTenant = async (tenantId) => {
-    if (!window.confirm('Are you sure you want to delete this tenant? This action cannot be undone.')) {
+    if (!validateForm()) {
       return;
     }
 
     try {
-      await adminAPI.deleteTenant(tenantId);
-      setMessage('Tenant deleted successfully');
-      fetchTenants();
+      const result = await updateTenant(editingTenant.id, formData);
+      if (result.success) {
+        showSuccess('Tenant updated successfully');
+        setEditingTenant(null);
+        setFormData({ name: '', domain: '' });
+        loadTenants();
+      } else {
+        showError(result.message);
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to delete tenant');
-      console.error('Error deleting tenant:', err);
+      showError('Failed to update tenant');
     }
+  };
+
+  const handleDeleteTenant = async (tenantId) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Tenant',
+      message: 'Are you sure you want to delete this tenant? This action cannot be undone.',
+      action: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        try {
+          const result = await deleteTenant(tenantId);
+          if (result.success) {
+            showSuccess('Tenant deleted successfully');
+            loadTenants();
+          } else {
+            showError(result.message);
+          }
+        } catch (err) {
+          showError('Failed to delete tenant');
+        } finally {
+          setConfirmModal({ isOpen: false, title: '', message: '', action: null, loading: false });
+        }
+      },
+    });
   };
 
   const startEdit = (tenant) => {
@@ -92,16 +129,13 @@ const AdminTenants = () => {
       name: tenant.name,
       domain: tenant.domain,
     });
+    setFormErrors({});
   };
 
   const cancelEdit = () => {
     setEditingTenant(null);
     setFormData({ name: '', domain: '' });
-  };
-
-  const clearMessages = () => {
-    setMessage('');
-    setError('');
+    setFormErrors({});
   };
 
   const formatDate = (dateString) => {
@@ -112,151 +146,129 @@ const AdminTenants = () => {
     });
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
+  if (isLoading) {
+    return <Loading text="Loading tenants..." />;
   }
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Tenant Management</h1>
+          <h1 className="text-2xl font-bold text-foreground">Tenant Management</h1>
           <p className="text-gray-600">Manage organizations and their domains</p>
         </div>
-        <button
+        <Button
           onClick={() => setShowCreateForm(true)}
-          className="btn btn-primary"
+          variant="primary"
         >
           Add Tenant
-        </button>
+        </Button>
       </div>
-
-      {/* Messages */}
-      {message && (
-        <div className="bg-success bg-opacity-10 border border-success border-opacity-20 text-success px-4 py-3 rounded-md flex justify-between items-center">
-          <span>{message}</span>
-          <button onClick={clearMessages} className="text-success hover:text-success-dark">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-error bg-opacity-10 border border-error border-opacity-20 text-error px-4 py-3 rounded-md flex justify-between items-center">
-          <span>{error}</span>
-          <button onClick={clearMessages} className="text-error hover:text-error-dark">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      )}
 
       {/* Create/Edit Form */}
       {(showCreateForm || editingTenant) && (
-        <div className="card">
-          <h2 className="text-xl font-semibold text-gray-900 mb-6">
-            {editingTenant ? 'Edit Tenant' : 'Create New Tenant'}
-          </h2>
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h2 className="text-xl font-semibold text-foreground mb-6">
+              {editingTenant ? 'Edit Tenant' : 'Create New Tenant'}
+            </h2>
 
-          <form onSubmit={editingTenant ? handleUpdateTenant : handleCreateTenant} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700">
-                  Tenant Name
-                </label>
-                <input
-                  type="text"
-                  id="name"
+            <form onSubmit={editingTenant ? handleUpdateTenant : handleCreateTenant} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Input
+                  label="Tenant Name"
                   name="name"
+                  type="text"
+                  required
+                  placeholder="Enter tenant name"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                  className="input mt-1"
-                  placeholder="Enter tenant name"
+                  error={formErrors.name}
                 />
-              </div>
 
-              <div>
-                <label htmlFor="domain" className="block text-sm font-medium text-gray-700">
-                  Domain
-                </label>
-                <input
-                  type="text"
-                  id="domain"
+                <Input
+                  label="Domain"
                   name="domain"
+                  type="text"
+                  required
+                  placeholder="example.com"
                   value={formData.domain}
                   onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
-                  required
-                  className="input mt-1"
-                  placeholder="example.com"
+                  error={formErrors.domain}
                 />
-                <p className="mt-1 text-sm text-gray-500">
-                  Domain must be a valid domain name
-                </p>
               </div>
-            </div>
 
-            <div className="flex justify-end space-x-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowCreateForm(false);
-                  cancelEdit();
-                }}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-              >
-                {editingTenant ? 'Update Tenant' : 'Create Tenant'}
-              </button>
-            </div>
-          </form>
+              <div className="flex justify-end space-x-3">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateForm(false);
+                    cancelEdit();
+                  }}
+                  variant="secondary"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                >
+                  {editingTenant ? 'Update Tenant' : 'Create Tenant'}
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
       {/* Tenants Table */}
-      <div className="card">
+      <div className="bg-white shadow overflow-hidden sm:rounded-md">
         <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <th>Name</th>
-                <th>Domain</th>
-                <th>Created</th>
-                <th>Actions</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Name
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Domain
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Created
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-white divide-y divide-gray-200">
               {tenants.map((tenant) => (
                 <tr key={tenant.id}>
-                  <td className="font-medium text-gray-900">{tenant.name}</td>
-                  <td>{tenant.domain}</td>
-                  <td>{formatDate(tenant.created_at)}</td>
-                  <td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-foreground">{tenant.name}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-foreground">{tenant.domain}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {formatDate(tenant.created_at)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex space-x-2">
-                      <button
+                      <Button
                         onClick={() => startEdit(tenant)}
-                        className="text-primary-600 hover:text-primary-800 text-sm font-medium"
+                        variant="secondary"
+                        size="sm"
                       >
                         Edit
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         onClick={() => handleDeleteTenant(tenant.id)}
-                        className="text-error hover:text-error-dark text-sm font-medium"
+                        variant="danger"
+                        size="sm"
                       >
                         Delete
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -276,29 +288,41 @@ const AdminTenants = () => {
       </div>
 
       {/* Pagination */}
-      {pagination.total > pagination.limit && (
+      {tenants.length > 0 && (
         <div className="flex items-center justify-between">
           <div className="text-sm text-gray-700">
-            Showing {pagination.offset + 1} to {Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total} tenants
+            Showing {pagination.offset + 1} to {Math.min(pagination.offset + pagination.limit, tenants.length)} of {tenants.length} tenants
           </div>
           <div className="flex space-x-2">
-            <button
+            <Button
               onClick={() => setPagination(prev => ({ ...prev, offset: Math.max(0, prev.offset - prev.limit) }))}
               disabled={pagination.offset === 0}
-              className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+              variant="secondary"
+              size="sm"
             >
               Previous
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => setPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }))}
-              disabled={pagination.offset + pagination.limit >= pagination.total}
-              className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={pagination.offset + pagination.limit >= tenants.length}
+              variant="secondary"
+              size="sm"
             >
               Next
-            </button>
+            </Button>
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal({ isOpen: false, title: '', message: '', action: null, loading: false })}
+        onConfirm={confirmModal.action}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        loading={confirmModal.loading}
+      />
     </div>
   );
 };

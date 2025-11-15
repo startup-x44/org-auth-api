@@ -23,8 +23,6 @@ func NewAdminHandler(authService service.AuthService) *AdminHandler {
 
 // ListUsers handles listing users with cursor-based pagination
 func (h *AdminHandler) ListUsers(c *gin.Context) {
-	tenantID, _ := c.Request.Context().Value("tenant_id").(string)
-
 	// Parse pagination parameters
 	limitStr := c.DefaultQuery("limit", "10")
 	cursor := c.DefaultQuery("cursor", "")
@@ -37,7 +35,7 @@ func (h *AdminHandler) ListUsers(c *gin.Context) {
 		limit = 100 // Max limit
 	}
 
-	response, err := h.authService.UserService().ListUsers(c.Request.Context(), tenantID, limit, cursor)
+	response, err := h.authService.UserService().ListUsers(c.Request.Context(), limit, cursor)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -180,7 +178,7 @@ func (h *AdminHandler) GetTenant(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": response,
+		"data":    response,
 	})
 }
 
@@ -277,6 +275,6 @@ func (h *AdminHandler) ListTenants(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": response,
+		"data":    response,
 	})
 }

@@ -166,16 +166,17 @@ func (s *tenantService) DeleteTenant(ctx context.Context, tenantID string) error
 		return errors.New("tenant ID is required")
 	}
 
-	// Check if tenant has users
-	userCount, err := s.repo.User().Count(ctx, tenantID)
+	// Check if tenant has users (Note: In organization system, users are global)
+	// This check is kept for backward compatibility but may not be accurate
+	userCount, err := s.repo.User().Count(ctx)
 	if err != nil {
-		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to check tenant users")
-		return fmt.Errorf("failed to check tenant users: %w", err)
+		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, "Failed to check users")
+		return fmt.Errorf("failed to check users: %w", err)
 	}
 
 	if userCount > 0 {
-		err := errors.New("cannot delete tenant with existing users")
-		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("Tenant has %d users", userCount))
+		err := errors.New("cannot delete tenant with existing users (legacy check)")
+		s.auditLogger.LogTenantAction("system", "delete_tenant", tenantID, getClientIP(ctx), getUserAgent(ctx), false, err, fmt.Sprintf("System has %d users", userCount))
 		return err
 	}
 

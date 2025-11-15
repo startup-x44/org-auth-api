@@ -170,9 +170,9 @@ func CreateTestUser(t *testing.T, db *gorm.DB, email, password, userType string,
 	user := &models.User{
 		Email:        email,
 		PasswordHash: password,
-		UserType:     userType,
-		TenantID:     tenantID,
-		Status:       models.UserStatusActive,
+		IsSuperadmin: false,
+		GlobalRole:   "user",
+		Status:       "active",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}

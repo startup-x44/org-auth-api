@@ -200,6 +200,17 @@ func ValidateTenantName(name string) error {
 	return nil
 }
 
+// IsValidSlug validates organization slug format
+func IsValidSlug(slug string) bool {
+	if slug == "" {
+		return false
+	}
+
+	// Slug should be lowercase, contain only letters, numbers, and hyphens
+	slugRegex := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	return slugRegex.MatchString(slug)
+}
+
 // ValidateUserRegistration validates user registration data
 func ValidateUserRegistration(email, password, confirmPassword, userType, tenantID string) error {
 	if err := ValidateEmail(email); err != nil {

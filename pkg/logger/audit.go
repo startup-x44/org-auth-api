@@ -12,18 +12,18 @@ import (
 
 // AuditEvent represents an audit log event
 type AuditEvent struct {
-	Timestamp   time.Time `json:"timestamp"`
-	UserID      string    `json:"user_id,omitempty"`
-	Action      string    `json:"action"`
-	Resource    string    `json:"resource"`
-	ResourceID  string    `json:"resource_id,omitempty"`
-	IPAddress   string    `json:"ip_address,omitempty"`
-	UserAgent   string    `json:"user_agent,omitempty"`
-	Details     string    `json:"details,omitempty"`
-	Success     bool      `json:"success"`
-	Error       string    `json:"error,omitempty"`
-	Service     string    `json:"service"`
-	Method      string    `json:"method,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+	UserID     string    `json:"user_id,omitempty"`
+	Action     string    `json:"action"`
+	Resource   string    `json:"resource"`
+	ResourceID string    `json:"resource_id,omitempty"`
+	IPAddress  string    `json:"ip_address,omitempty"`
+	UserAgent  string    `json:"user_agent,omitempty"`
+	Details    string    `json:"details,omitempty"`
+	Success    bool      `json:"success"`
+	Error      string    `json:"error,omitempty"`
+	Service    string    `json:"service"`
+	Method     string    `json:"method,omitempty"`
 }
 
 // AuditLogger handles structured audit logging
@@ -110,6 +110,35 @@ func (a *AuditLogger) LogTenantAction(userID, action, tenantID, ipAddress, userA
 		Action:     action,
 		Resource:   "tenant",
 		ResourceID: tenantID,
+		IPAddress:  ipAddress,
+		UserAgent:  userAgent,
+		Details:    details,
+		Success:    success,
+		Service:    "auth-service",
+	}
+
+	if err != nil {
+		event.Error = err.Error()
+	}
+
+	// Get calling method name
+	if pc, _, _, ok := runtime.Caller(1); ok {
+		if fn := runtime.FuncForPC(pc); fn != nil {
+			event.Method = fn.Name()
+		}
+	}
+
+	a.logEvent(event)
+}
+
+// LogOrganizationAction logs an organization management action
+func (a *AuditLogger) LogOrganizationAction(userID, action, orgID, ipAddress, userAgent string, success bool, err error, details string) {
+	event := AuditEvent{
+		Timestamp:  time.Now(),
+		UserID:     userID,
+		Action:     action,
+		Resource:   "organization",
+		ResourceID: orgID,
 		IPAddress:  ipAddress,
 		UserAgent:  userAgent,
 		Details:    details,

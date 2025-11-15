@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
-import { resolveTenant, extractDomainFromEmail } from '../../utils/tenant';
+import useAuthStore from '../../stores/authStore';
+import useTenantStore from '../../stores/tenantStore';
+import { Button, Input, Loading } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const Register = () => {
   const [formData, setFormData] = useState({
@@ -15,56 +17,119 @@ const Register = () => {
     tenant_id: '',
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [resolvedTenant, setResolvedTenant] = useState('');
+  const [errors, setErrors] = useState({});
 
-  const { register } = useAuth();
+  const { register } = useAuthStore();
+  const { tenantId, resolveTenantFromEmail, setTenantId } = useTenantStore();
+  const { error: showError, success: showSuccess } = useNotificationStore();
   const navigate = useNavigate();
 
-  // Auto-resolve tenant on component mount and email change
+  // Initialize tenant from subdomain or set default
   useEffect(() => {
-    const tenant = resolveTenant(formData.email);
-    if (tenant) {
-      setResolvedTenant(tenant);
-      setFormData(prev => ({ ...prev, tenant_id: tenant }));
+    const subdomainTenant = tenantId;
+    if (subdomainTenant) {
+      setFormData(prev => ({ ...prev, tenant_id: subdomainTenant }));
     }
-  }, [formData.email]);
+  }, [tenantId]);
+
+  const validateForm = () => {
+    const newErrors = {};
+
+    if (!formData.email) {
+      newErrors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      newErrors.email = 'Email is invalid';
+    }
+
+    if (!formData.password) {
+      newErrors.password = 'Password is required';
+    } else if (formData.password.length < 8) {
+      newErrors.password = 'Password must be at least 8 characters';
+    }
+
+    if (!formData.confirm_password) {
+      newErrors.confirm_password = 'Please confirm your password';
+    } else if (formData.password !== formData.confirm_password) {
+      newErrors.confirm_password = 'Passwords do not match';
+    }
+
+    if (!formData.first_name) {
+      newErrors.first_name = 'First name is required';
+    }
+
+    if (!formData.last_name) {
+      newErrors.last_name = 'Last name is required';
+    }
+
+    if (!formData.tenant_id) {
+      newErrors.tenant_id = 'Tenant is required';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleChange = (e) => {
+    const { name, value } = e.target;
     setFormData({
       ...formData,
-      [e.target.name]: e.target.value,
+      [name]: value,
     });
+
+    // Auto-resolve tenant from email domain
+    if (name === 'email' && value.includes('@')) {
+      const emailTenant = resolveTenantFromEmail(value);
+      if (emailTenant && !formData.tenant_id) {
+        setFormData(prev => ({ ...prev, tenant_id: emailTenant }));
+      }
+    }
+
+    // Clear error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({
+        ...prev,
+        [name]: undefined,
+      }));
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setError('');
 
-    // Validate tenant is resolved
-    if (!formData.tenant_id) {
-      setError('Unable to determine tenant. Please contact support.');
-      setLoading(false);
+    if (!validateForm()) {
       return;
     }
 
-    const result = await register(formData);
+    setLoading(true);
 
-    if (result.success) {
-      navigate('/dashboard');
-    } else {
-      setError(result.message);
+    try {
+      const result = await register(formData);
+
+      if (result.success) {
+        // Set tenant ID in store after successful registration
+        setTenantId(formData.tenant_id);
+        showSuccess('Account created successfully! Please check your email for verification.');
+        navigate('/login');
+      } else {
+        showError(result.message);
+      }
+    } catch (err) {
+      const errorMessage = 'An unexpected error occurred. Please try again.';
+      showError(errorMessage);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
+
+  if (loading) {
+    return <Loading fullScreen text="Creating your account..." />;
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
             Create your account
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
@@ -79,70 +144,40 @@ const Register = () => {
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md">
-              {error}
-            </div>
-          )}
-
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="first_name" className="block text-sm font-medium text-gray-700">
-                  First Name
-                </label>
-                <input
-                  id="first_name"
-                  name="first_name"
-                  type="text"
-                  className="input mt-1"
-                  placeholder="First name"
-                  value={formData.first_name}
-                  onChange={handleChange}
-                />
-              </div>
-              <div>
-                <label htmlFor="last_name" className="block text-sm font-medium text-gray-700">
-                  Last Name
-                </label>
-                <input
-                  id="last_name"
-                  name="last_name"
-                  type="text"
-                  className="input mt-1"
-                  placeholder="Last name"
-                  value={formData.last_name}
-                  onChange={handleChange}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email Address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
+              <Input
+                label="First Name"
+                name="first_name"
+                type="text"
                 required
-                className="input mt-1"
-                placeholder="Enter your email"
-                value={formData.email}
+                placeholder="First name"
+                value={formData.first_name}
                 onChange={handleChange}
+                error={errors.first_name}
+              />
+              <Input
+                label="Last Name"
+                name="last_name"
+                type="text"
+                required
+                placeholder="Last name"
+                value={formData.last_name}
+                onChange={handleChange}
+                error={errors.last_name}
               />
             </div>
 
-            {resolvedTenant && (
-              <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-                <div className="text-sm text-blue-800">
-                  <strong>Organization:</strong> {resolvedTenant}
-                </div>
-                <div className="text-xs text-blue-600 mt-1">
-                  Registration is restricted to your organization's domain.
-                </div>
-              </div>
-            )}
+            <Input
+              label="Email Address"
+              name="email"
+              type="email"
+              required
+              placeholder="Enter your email"
+              value={formData.email}
+              onChange={handleChange}
+              error={errors.email}
+            />
 
             <div>
               <label htmlFor="user_type" className="block text-sm font-medium text-gray-700">
@@ -151,7 +186,7 @@ const Register = () => {
               <select
                 id="user_type"
                 name="user_type"
-                className="input mt-1"
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                 value={formData.user_type}
                 onChange={handleChange}
               >
@@ -165,62 +200,48 @@ const Register = () => {
               </select>
             </div>
 
-            <div>
-              <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
-                Phone Number
-              </label>
-              <input
-                id="phone"
-                name="phone"
-                type="tel"
-                className="input mt-1"
-                placeholder="Phone number (optional)"
-                value={formData.phone}
-                onChange={handleChange}
-              />
-            </div>
+            <Input
+              label="Phone Number"
+              name="phone"
+              type="tel"
+              placeholder="Phone number (optional)"
+              value={formData.phone}
+              onChange={handleChange}
+              error={errors.phone}
+            />
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                className="input mt-1"
-                placeholder="Create a password"
-                value={formData.password}
-                onChange={handleChange}
-              />
-            </div>
+            <Input
+              label="Password"
+              name="password"
+              type="password"
+              required
+              placeholder="Create a password"
+              value={formData.password}
+              onChange={handleChange}
+              error={errors.password}
+            />
 
-            <div>
-              <label htmlFor="confirm_password" className="block text-sm font-medium text-gray-700">
-                Confirm Password
-              </label>
-              <input
-                id="confirm_password"
-                name="confirm_password"
-                type="password"
-                required
-                className="input mt-1"
-                placeholder="Confirm your password"
-                value={formData.confirm_password}
-                onChange={handleChange}
-              />
-            </div>
+            <Input
+              label="Confirm Password"
+              name="confirm_password"
+              type="password"
+              required
+              placeholder="Confirm your password"
+              value={formData.confirm_password}
+              onChange={handleChange}
+              error={errors.confirm_password}
+            />
           </div>
 
           <div>
-            <button
+            <Button
               type="submit"
-              disabled={loading}
-              className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              variant="primary"
+              className="w-full"
+              loading={loading}
             >
-              {loading ? 'Creating account...' : 'Create account'}
-            </button>
+              Create account
+            </Button>
           </div>
         </form>
       </div>

@@ -47,22 +47,22 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 
 		// Set user context
 		ctx := context.WithValue(c.Request.Context(), "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "user_type", claims.UserType)
-		ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
+		ctx = context.WithValue(ctx, "user_email", claims.Email)
+		ctx = context.WithValue(ctx, "is_superadmin", claims.IsSuperadmin)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
 	}
 }
 
-// AdminRequired middleware requires admin user type
+// AdminRequired middleware requires superadmin privileges
 func (m *AuthMiddleware) AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userType, exists := c.Request.Context().Value("user_type").(string)
-		if !exists || userType != "Admin" {
+		isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool)
+		if !exists || !isSuperadmin {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
-				"message": "Admin access required",
+				"message": "Superadmin access required",
 			})
 			c.Abort()
 			return

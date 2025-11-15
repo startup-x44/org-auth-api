@@ -1,27 +1,33 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { authAPI } from '../../services/api';
+import useAuthStore from '../../stores/authStore';
+import { Button, Input } from '../shared';
+import useNotificationStore from '../../stores/notificationStore';
 
 const ForgotPassword = () => {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
   const [emailSent, setEmailSent] = useState(false);
+
+  const { forgotPassword } = useAuthStore();
+  const { error: showError, success: showSuccess } = useNotificationStore();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
-    setMessage('');
 
     try {
-      await authAPI.forgotPassword({ email });
-      setEmailSent(true);
-      setMessage('Password reset instructions have been sent to your email.');
+      const result = await forgotPassword(email);
+
+      if (result.success) {
+        setEmailSent(true);
+        showSuccess('Password reset instructions have been sent to your email.');
+      } else {
+        showError(result.message);
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to send reset email. Please try again.');
-      console.error('Forgot password error:', err);
+      const errorMessage = 'Failed to send reset email. Please try again.';
+      showError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -32,16 +38,16 @@ const ForgotPassword = () => {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           <div>
-            <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-success bg-opacity-10">
-              <svg className="h-6 w-6 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-green-100">
+              <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
               Check your email
             </h2>
             <p className="mt-2 text-center text-sm text-gray-600">
-              {message}
+              Password reset instructions have been sent to your email.
             </p>
           </div>
 
@@ -62,7 +68,7 @@ const ForgotPassword = () => {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground">
             Forgot your password?
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
@@ -71,50 +77,25 @@ const ForgotPassword = () => {
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {message && (
-            <div className="bg-success bg-opacity-10 border border-success border-opacity-20 text-success px-4 py-3 rounded-md">
-              {message}
-            </div>
-          )}
-
-          {error && (
-            <div className="bg-error bg-opacity-10 border border-error border-opacity-20 text-error px-4 py-3 rounded-md">
-              {error}
-            </div>
-          )}
+          <Input
+            label="Email Address"
+            name="email"
+            type="email"
+            required
+            placeholder="Enter your email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
           <div>
-            <label htmlFor="email" className="sr-only">
-              Email address
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              className="input"
-              placeholder="Email address"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <button
+            <Button
               type="submit"
-              disabled={loading}
-              className="btn btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              variant="primary"
+              className="w-full"
+              loading={loading}
             >
-              {loading ? (
-                <div className="flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Sending...
-                </div>
-              ) : (
-                'Send reset link'
-              )}
-            </button>
+              Send reset link
+            </Button>
           </div>
 
           <div className="text-center">

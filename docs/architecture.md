@@ -1,8 +1,8 @@
-# Architecture Documentation
+# Architecture Guide - Multi-Tenant Authentication Service
 
-## Overview
+## System Overview
 
-The SaaS Authentication Microservice is a production-ready authentication system built with Go, designed to handle multi-tenant user management, secure authentication, and comprehensive security features for the Blocksure platform.
+The Multi-Tenant Authentication Service is a production-ready SaaS authentication microservice built with Go and React, designed to provide secure, scalable user authentication and authorization with complete tenant isolation.
 
 ## System Architecture
 
