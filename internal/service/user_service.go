@@ -1434,24 +1434,13 @@ func (s *userService) issueTokenPair(ctx context.Context, user *models.User, org
 }
 
 // getRolePermissionsFiltered fetches permissions filtered by user type
-// Superadmin: system permissions + organization permissions
-// Regular user: ONLY organization custom permissions (no system permissions)
+// System roles (is_system=true) are global and reused across all organizations
+// Custom roles (is_system=false) are organization-specific
 func (s *userService) getRolePermissionsFiltered(ctx context.Context, user *models.User, role *models.Role, orgID uuid.UUID) ([]string, error) {
-	// CRITICAL: System roles should NOT be assigned to organizations
-	// If somehow a system role is found, handle it carefully
-	if role.IsSystem && role.OrganizationID == nil {
-		// System role detected - only superadmin should have these
-		if user.IsSuperadmin {
-			// Superadmin with system role: return all permissions
-			return models.DefaultAdminPermissions(), nil
-		} else {
-			// ERROR: Non-superadmin should never have a system role
-			return nil, errors.New("invalid role assignment: system role assigned to non-superadmin")
-		}
-	}
+	// System roles are global (is_system=true, organization_id=NULL) and reused across all orgs
+	// This is the new standard behavior - all users can have system roles
 
-	// For custom organization roles (IsSystem=false, OrganizationID != nil)
-	// Fetch permissions from DB (filtered by organization context)
+	// Fetch permissions from DB
 	perms, err := s.repo.Permission().GetRolePermissions(ctx, role.ID)
 	if err != nil {
 		return nil, err

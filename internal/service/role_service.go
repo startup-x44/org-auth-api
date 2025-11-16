@@ -181,20 +181,15 @@ func (s *roleService) GetUserPermissions(ctx context.Context, userID, orgID uuid
 func (s *roleService) CreateRole(ctx context.Context, req *CreateRoleRequest) (*RoleResponse, error) {
 	userID := s.getUserID(ctx)
 
-	// Validate: prevent creating system roles
-	// Only superadmin can create system roles, but this should be done through seeder/migration
-	// Regular users (including org admins) can ONLY create custom roles
-	if req.Name == models.RoleNameAdmin || req.Name == "system_admin" || req.Name == "superadmin" {
-		return nil, errors.New("cannot create system role names - reserved for platform administration")
-	}
-
 	// CRITICAL: Ensure IsSystem cannot be set to true by non-superadmins
 	// Custom roles must have IsSystem=false
 	// (Note: CreateRoleRequest should not even have IsSystem field to prevent this)
 
-	// Check if role name already exists in organization
+	// Check if role name already exists in organization (only check custom roles, not system roles)
+	// Allow custom roles with same names as system roles (e.g., custom "owner" role in org)
+	// This mirrors the permission model: custom permissions can have same names as system permissions
 	existingRole, err := s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID.String(), req.Name)
-	if err == nil && existingRole != nil {
+	if err == nil && existingRole != nil && !existingRole.IsSystem {
 		return nil, errors.New("role name already exists in organization")
 	}
 
@@ -264,7 +259,10 @@ func (s *roleService) GetRoleWithOrganization(ctx context.Context, roleID, orgID
 
 // GetRolesByOrganization retrieves all roles for an organization
 func (s *roleService) GetRolesByOrganization(ctx context.Context, orgID uuid.UUID) ([]*RoleResponse, error) {
-	roles, err := s.repo.Role().GetByOrganization(ctx, orgID.String())
+	// Check if user is superadmin to determine which roles to return
+	isSuperAdmin, _ := ctx.Value("is_superadmin").(bool)
+
+	roles, err := s.repo.Role().GetByOrganization(ctx, orgID.String(), isSuperAdmin)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get roles: %w", err)
 	}
@@ -565,9 +563,15 @@ func (s *roleService) AssignPermissionsToRoleWithOrganization(ctx context.Contex
 		return ErrSomePermissionsNotFound
 	}
 
-	// STRICT VALIDATION: Ensure permissions are valid for this organization
+	// STRICT VALIDATION: Custom roles can ONLY have custom permissions
+	// System roles can ONLY have system permissions (but this is blocked earlier)
 	for _, perm := range perms {
-		// Rule: permission.IsSystem == true OR permission.OrganizationID == role.OrganizationID
+		// RULE 1: Custom roles (is_system=false) can ONLY be assigned custom permissions (is_system=false)
+		if !role.IsSystem && perm.IsSystem {
+			return fmt.Errorf("cannot assign system permission '%s' to custom role - custom roles can only have custom permissions", perm.Name)
+		}
+
+		// RULE 2: Custom permissions must belong to the same organization as the role
 		if !perm.IsSystem && (perm.OrganizationID == nil || *perm.OrganizationID != orgID) {
 			return fmt.Errorf("permission %s belongs to another organization and cannot be assigned", perm.Name)
 		}
@@ -735,10 +739,14 @@ func (s *roleService) ListCustomPermissionsForOrganization(ctx context.Context, 
 func (s *roleService) CreatePermissionForOrganization(ctx context.Context, orgID uuid.UUID, name, displayName, description, category string) (*PermissionResponse, error) {
 	userID := s.getUserID(ctx)
 
-	// Check if a permission with this name already exists in this organization context
+	// Check if a CUSTOM permission with this name already exists in THIS organization
+	// System permissions (is_system=true) don't conflict - users can create custom permissions with same name
 	existing, err := s.repo.Permission().GetByNameAndOrganization(ctx, name, orgID.String())
 	if err == nil && existing != nil {
-		return nil, ErrPermissionAlreadyExists
+		// Only block if it's a custom permission in THIS org (not a system permission)
+		if !existing.IsSystem && existing.OrganizationID != nil && *existing.OrganizationID == orgID {
+			return nil, ErrPermissionAlreadyExists
+		}
 	}
 
 	// Check if displayName is unique within the same category for this organization

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -176,7 +177,9 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 
 	result, err := h.authService.RoleService().UpdateRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, &req)
 	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "Failed to update role. Please try again")
+		// Log the actual error for debugging
+		fmt.Printf("UpdateRole error: %v\n", err)
+		h.errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 

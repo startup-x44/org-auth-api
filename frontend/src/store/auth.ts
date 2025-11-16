@@ -236,6 +236,10 @@ const useAuthStore = create<AuthStore>()(
           localStorage.setItem(`user_${organizationId}`, JSON.stringify(user))
           localStorage.setItem(`organization_${organizationId}`, JSON.stringify(organization))
           localStorage.setItem('organization_id', organizationId)
+          
+          // Also store in global keys for axios interceptor
+          localStorage.setItem('access_token', token.access_token)
+          localStorage.setItem('refresh_token', token.refresh_token)
 
           set({
             accessToken: token.access_token,
@@ -320,20 +324,29 @@ const useAuthStore = create<AuthStore>()(
           const permissions = claims?.permissions || []
           const roleId = organization.role_id || null
           const roleName = organization.role_name || organization.role || null
+          
+          // Extract organization ID - backend returns organization_id (not id)
+          const orgId = organization.organization_id || organization.id
 
           // Store with org-specific keys
-          localStorage.setItem(`access_token_${organization.id}`, token.access_token)
-          localStorage.setItem(`refresh_token_${organization.id}`, token.refresh_token)
-          localStorage.setItem(`user_${organization.id}`, JSON.stringify(user))
-          localStorage.setItem(`organization_${organization.id}`, JSON.stringify(organization))
-          localStorage.setItem('organization_id', organization.id)
+          localStorage.setItem(`access_token_${orgId}`, token.access_token)
+          localStorage.setItem(`refresh_token_${orgId}`, token.refresh_token)
+          localStorage.setItem(`user_${orgId}`, JSON.stringify(user))
+          localStorage.setItem(`organization_${orgId}`, JSON.stringify(organization))
+          localStorage.setItem('organization_id', orgId)
+          
+          // Also store in global keys for axios interceptor
+          localStorage.setItem('access_token', token.access_token)
+          localStorage.setItem('refresh_token', token.refresh_token)
+
+          console.log('✅ createOrganization - Setting organizationId:', orgId)
 
           set((state) => ({
             ...state,
             user,
             accessToken: token.access_token,
             refreshToken: token.refresh_token,
-            organizationId: organization.id,
+            organizationId: orgId,
             organization,
             organizations: [...(state.organizations || []), organization], // Add new organization to list
             permissions,

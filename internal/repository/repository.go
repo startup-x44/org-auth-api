@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"auth-service/internal/models"
@@ -127,54 +126,24 @@ func (r *repository) APIKey() APIKeyRepository {
 	return r.apiKeyRepo
 }
 
-// CreateDefaultAdminRole creates the default OWNER role for an organization with all permissions
-// This is a CUSTOM role (IsSystem=false) specific to the organization
+// CreateDefaultAdminRole finds the system OWNER role and returns it
+// System roles are global (is_system=true, organization_id=NULL) and reused across all organizations
+// User membership with this role is created at the service layer via AssignRoleToUser
 func (r *repository) CreateDefaultAdminRole(ctx context.Context, orgID, createdBy string) (*models.Role, error) {
-	orgUUID, err := uuid.Parse(orgID)
+	// Find the system OWNER role (global role with is_system=true)
+	var ownerRole models.Role
+	err := r.db.WithContext(ctx).
+		Where("name = ? AND is_system = ? AND organization_id IS NULL", "owner", true).
+		First(&ownerRole).Error
+
 	if err != nil {
-		return nil, fmt.Errorf("invalid organization ID: %w", err)
-	}
-
-	createdByUUID, err := uuid.Parse(createdBy)
-	if err != nil {
-		return nil, fmt.Errorf("invalid user ID: %w", err)
-	}
-
-	// Create OWNER role - this is a CUSTOM role, NOT a system role
-	ownerRole := &models.Role{
-		OrganizationID: &orgUUID,
-		Name:           "owner", // Use "owner" instead of "admin" to differentiate from system roles
-		DisplayName:    "Owner",
-		Description:    "Full access to all organization features (organization owner)",
-		IsSystem:       false, // CUSTOM role, not system
-		CreatedBy:      createdByUUID,
-	}
-
-	if err := r.db.WithContext(ctx).Create(ownerRole).Error; err != nil {
-		return nil, fmt.Errorf("failed to create owner role: %w", err)
-	}
-
-	// Get all SYSTEM permissions (these are global and available to all orgs)
-	var permissions []models.Permission
-	adminPermNames := models.DefaultAdminPermissions()
-	if err := r.db.WithContext(ctx).
-		Where("name IN ? AND is_system = ? AND organization_id IS NULL", adminPermNames, true).
-		Find(&permissions).Error; err != nil {
-		return nil, fmt.Errorf("failed to get permissions: %w", err)
-	}
-
-	// Assign all system permissions to owner role
-	for _, perm := range permissions {
-		rolePermission := &models.RolePermission{
-			RoleID:       ownerRole.ID,
-			PermissionID: perm.ID,
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("system OWNER role not found - run database seeder first")
 		}
-		if err := r.db.WithContext(ctx).Create(rolePermission).Error; err != nil {
-			return nil, fmt.Errorf("failed to assign permission %s to owner: %w", perm.Name, err)
-		}
+		return nil, fmt.Errorf("failed to find system owner role: %w", err)
 	}
 
-	return ownerRole, nil
+	return &ownerRole, nil
 }
 
 // BeginTransaction starts a new database transaction

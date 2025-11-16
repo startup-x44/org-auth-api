@@ -81,8 +81,8 @@ type UpdateOrganizationRequest struct {
 // InviteUserRequest represents user invitation request
 type InviteUserRequest struct {
 	OrganizationID string `json:"organization_id"`
-	Email          string `json:"email"`
-	RoleName       string `json:"role_name"` // Role name to lookup (e.g., "admin", "issuer", "student")
+	Email          string `json:"email" binding:"required"`
+	RoleName       string `json:"role" binding:"required"` // Role name to lookup (e.g., "owner", "student")
 }
 
 // UpdateMembershipRequest represents membership update request
@@ -205,11 +205,6 @@ func (s *organizationService) GetOrganizationBySlug(ctx context.Context, slug st
 func (s *organizationService) UpdateOrganization(ctx context.Context, orgID string, req *UpdateOrganizationRequest) (*OrganizationResponse, error) {
 	userID, _ := ctx.Value("user_id").(string)
 
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, orgID, userID); err != nil {
-		return nil, err
-	}
-
 	org, err := s.repo.Organization().GetByID(ctx, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("organization not found: %w", err)
@@ -235,11 +230,6 @@ func (s *organizationService) UpdateOrganization(ctx context.Context, orgID stri
 // DeleteOrganization deletes an organization
 func (s *organizationService) DeleteOrganization(ctx context.Context, orgID string) error {
 	userID, _ := ctx.Value("user_id").(string)
-
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, orgID, userID); err != nil {
-		return err
-	}
 
 	// Check if organization has members
 	memberCount, err := s.repo.OrganizationMembership().CountByOrganization(ctx, orgID)
@@ -295,11 +285,6 @@ func (s *organizationService) ListAllOrganizations(ctx context.Context) ([]*Orga
 func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserRequest) (*models.OrganizationInvitation, error) {
 	userID, _ := ctx.Value("user_id").(string)
 
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, req.OrganizationID, userID); err != nil {
-		return nil, err
-	}
-
 	// Validate invitation
 	if err := s.validateInviteUserRequest(req); err != nil {
 		return nil, err
@@ -325,10 +310,21 @@ func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserReq
 		}
 	}
 
-	// Lookup role by name
-	role, err := s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID, req.RoleName)
-	if err != nil {
-		return nil, fmt.Errorf("role not found: %w", err)
+	// Lookup role by name - if not provided, use a default role
+	var role *models.Role
+
+	if req.RoleName == "" {
+		// Default to "student" role if no role specified
+		role, err = s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID, "student")
+		if err != nil {
+			// If student role doesn't exist, try to get any non-system role
+			return nil, errors.New("no default role found - please specify a role name")
+		}
+	} else {
+		role, err = s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID, req.RoleName)
+		if err != nil {
+			return nil, fmt.Errorf("role not found: %w", err)
+		}
 	}
 
 	// Prevent inviting users with system roles (admin)
@@ -463,11 +459,6 @@ func (s *organizationService) GetMembership(ctx context.Context, orgID, userID s
 func (s *organizationService) UpdateMembership(ctx context.Context, orgID, userID string, req *UpdateMembershipRequest) (*models.OrganizationMembership, error) {
 	currentUserID, _ := ctx.Value("user_id").(string)
 
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, orgID, currentUserID); err != nil {
-		return nil, err
-	}
-
 	// Get organization to check if user is the owner
 	org, err := s.repo.Organization().GetByID(ctx, orgID)
 	if err != nil {
@@ -512,14 +503,9 @@ func (s *organizationService) UpdateMembership(ctx context.Context, orgID, userI
 	return membership, nil
 }
 
-// RemoveMember removes a member from organization
+// RemoveMember removes a user from an organization
 func (s *organizationService) RemoveMember(ctx context.Context, orgID, userID string) error {
 	currentUserID, _ := ctx.Value("user_id").(string)
-
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, orgID, currentUserID); err != nil {
-		return err
-	}
 
 	// Get organization to check if user is the owner
 	org, err := s.repo.Organization().GetByID(ctx, orgID)
@@ -620,9 +606,8 @@ func (s *organizationService) CancelInvitation(ctx context.Context, invitationID
 
 	// Check permission (only invited by user or org admin can cancel)
 	if invitation.InvitedBy.String() != userID {
-		if err := s.checkAdminPermission(ctx, invitation.OrganizationID.String(), userID); err != nil {
-			return errors.New("not authorized to cancel this invitation")
-		}
+		// Permission check is now handled by middleware
+		return errors.New("not authorized to cancel this invitation")
 	}
 
 	invitation.Status = models.InvitationStatusCancelled
@@ -646,9 +631,8 @@ func (s *organizationService) ResendInvitation(ctx context.Context, invitationID
 
 	// Check permission
 	if invitation.InvitedBy.String() != userID {
-		if err := s.checkAdminPermission(ctx, invitation.OrganizationID.String(), userID); err != nil {
-			return nil, errors.New("not authorized to resend this invitation")
-		}
+		// Permission check is now handled by middleware
+		return nil, errors.New("not authorized to resend this invitation")
 	}
 
 	// Extend expiry and update
@@ -706,13 +690,6 @@ func (s *organizationService) ListPendingInvitations(ctx context.Context, orgID 
 		searchTerm = search[0]
 	}
 
-	userID, _ := ctx.Value("user_id").(string)
-
-	// Check admin permission
-	if err := s.checkAdminPermission(ctx, orgID, userID); err != nil {
-		return nil, err
-	}
-
 	invitations, err := s.repo.OrganizationInvitation().GetPendingByOrganization(ctx, orgID)
 	if err != nil {
 		return nil, err
@@ -760,12 +737,7 @@ func (s *organizationService) validateInviteUserRequest(req *InviteUserRequest) 
 		return errors.New("email is required")
 	}
 
-	if req.RoleName == "" {
-		return errors.New("role is required")
-	}
-
-	// Role validation will happen when looking up the role in the database
-	// No need to hardcode valid roles here since they're dynamic per organization
+	// Role is optional - will default to a basic role if not specified
 
 	// Basic email validation
 	if !strings.Contains(req.Email, "@") {
@@ -840,30 +812,6 @@ func (s *organizationService) convertToOrganizationResponse(ctx context.Context,
 		UpdatedAt:   org.UpdatedAt,
 		MemberCount: int(memberCount),
 	}
-}
-
-func (s *organizationService) checkAdminPermission(ctx context.Context, orgID, userID string) error {
-	isSuperadmin, _ := ctx.Value("is_superadmin").(bool)
-	if isSuperadmin {
-		return nil
-	}
-
-	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID, userID)
-	if err != nil {
-		return errors.New("not a member of this organization")
-	}
-
-	// Load role to check if admin
-	role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
-	if err != nil {
-		return errors.New("failed to load role")
-	}
-
-	if role.Name != models.RoleNameAdmin || membership.Status != models.MembershipStatusActive {
-		return errors.New("admin permission required")
-	}
-
-	return nil
 }
 
 // TODO: Implement these utility functions

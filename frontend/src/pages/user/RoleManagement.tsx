@@ -30,12 +30,28 @@ interface Permission {
 }
 
 const RoleManagement: React.FC = () => {
-  const { organizationId, hasPermission } = useAuthStore()
+  const { organizationId: storeOrgId, hasPermission, permissions, organization } = useAuthStore()
+  
+  // Fallback to localStorage if Zustand has null (cache issue)
+  const organizationId = storeOrgId || localStorage.getItem('organization_id') || null
+  
+  console.log('🔍 RoleManagement - storeOrgId:', storeOrgId)
+  console.log('🔍 RoleManagement - localStorage org:', localStorage.getItem('organization_id'))
+  console.log('🔍 RoleManagement - final organizationId:', organizationId)
+  console.log('🔍 RoleManagement - organization:', organization)
+  
   const { toasts, removeToast, showSuccess, showError } = useToast()
   const [roles, setRoles] = useState<Role[]>([])
-  const [permissions, setPermissions] = useState<Permission[]>([])
+  const [permissionsState, setPermissionsState] = useState<Permission[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // Debug log to check permissions
+  useEffect(() => {
+    console.log('🔍 RoleManagement - Current permissions:', permissions)
+    console.log('🔍 RoleManagement - Has role:view?', hasPermission('role:view'))
+    console.log('🔍 RoleManagement - Has role:create?', hasPermission('role:create'))
+  }, [permissions, hasPermission])
 
   // Check if user can manage roles - only use proper role permissions
   const canManageRoles = hasPermission('role:view')
@@ -68,9 +84,13 @@ const RoleManagement: React.FC = () => {
   })
 
   useEffect(() => {
+    console.log('🔍 useEffect triggered - organizationId:', organizationId)
     if (organizationId) {
+      console.log('🔍 Fetching roles and permissions for org:', organizationId)
       fetchRoles()
       fetchPermissions()
+    } else {
+      console.log('⚠️ No organizationId - skipping fetch')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId])
@@ -91,15 +111,17 @@ const RoleManagement: React.FC = () => {
   const fetchRoles = async () => {
     if (!organizationId) return
     
+    console.log('🔍 fetchRoles called with organizationId:', organizationId)
     try {
       setError('')
       const response = await organizationAPI.getRoles(organizationId)
+      console.log('✅ getRoles response:', response)
       if (response.success) {
         // Backend already filters out system roles for non-superadmin users
         setRoles(response.data)
       }
     } catch (error: any) {
-      console.error('Failed to fetch roles:', error)
+      console.error('❌ Failed to fetch roles:', error)
       setError(error.response?.data?.message || 'Failed to load roles. Please check your permissions.')
     }
   }
@@ -112,7 +134,7 @@ const RoleManagement: React.FC = () => {
       if (response.success) {
         // Backend should already return only organization-specific permissions
         // (system permissions available for assignment + custom org permissions)
-        setPermissions(response.data)
+        setPermissionsState(response.data)
       }
     } catch (error: any) {
       console.error('Failed to fetch permissions:', error)
@@ -331,7 +353,7 @@ const RoleManagement: React.FC = () => {
     setShowPermissionForm(true)
   }
 
-  const groupedPermissions = permissions.reduce((acc, permission) => {
+  const groupedPermissions = permissionsState.reduce((acc, permission) => {
     if (!acc[permission.category]) {
       acc[permission.category] = []
     }
@@ -374,17 +396,25 @@ const RoleManagement: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900">Roles</h2>
               <RequirePermission permission="role:create">
-                <Button
-                  onClick={() => {
-                    setIsCreating(true)
-                    setSelectedRole(null)
-                    setFormData({ name: '', display_name: '', description: '', permissions: [] })
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700"
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Role
-                </Button>
+                {(() => {
+                  console.log('🔍 RequirePermission for role:create - rendering button')
+                  return (
+                    <Button
+                      onClick={() => {
+                        console.log('🎯 New Role button clicked!')
+                        console.log('🎯 Current state:', { isCreating, selectedRole })
+                        setIsCreating(true)
+                        setSelectedRole(null)
+                        setFormData({ name: '', display_name: '', description: '', permissions: [] })
+                        console.log('🎯 State updated - isCreating should be true now')
+                      }}
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      New Role
+                    </Button>
+                  )
+                })()}
               </RequirePermission>
             </div>
 
@@ -416,7 +446,7 @@ const RoleManagement: React.FC = () => {
                         <div className="mt-3">
                           <div className="flex flex-wrap gap-1">
                             {role.permissions.slice(0, 3).map((permission) => {
-                              const perm = permissions.find(p => p.name === permission)
+                              const perm = permissionsState.find(p => p.name === permission)
                               return (
                                 <span
                                   key={permission}
@@ -549,15 +579,7 @@ const RoleManagement: React.FC = () => {
                                   <p className="font-medium text-sm text-gray-900">
                                     {permission.display_name}
                                   </p>
-                                  {permission.is_system ? (
-                                    <span className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
-                                      System
-                                    </span>
-                                  ) : (
-                                    <span className="px-1.5 py-0.5 text-xs bg-blue-100 text-blue-600 rounded">
-                                      Custom
-                                    </span>
-                                  )}
+                                  
                                 </div>
                                 <p className="text-xs text-gray-500">
                                   {permission.description}

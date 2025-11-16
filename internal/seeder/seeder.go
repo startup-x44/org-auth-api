@@ -33,13 +33,19 @@ func (s *DatabaseSeeder) Seed(ctx context.Context) error {
 	}
 	log.Println("✅ Permissions seeded")
 
-	// 2. Seed users (including superadmin)
+	// 2. Seed system roles (global roles used across all orgs)
+	if err := s.seedSystemRoles(ctx); err != nil {
+		return fmt.Errorf("failed to seed system roles: %w", err)
+	}
+	log.Println("✅ System roles seeded")
+
+	// 3. Seed users (including superadmin)
 	if err := s.seedUsers(ctx); err != nil {
 		return fmt.Errorf("failed to seed users: %w", err)
 	}
 	log.Println("✅ Users seeded")
 
-	// 3. Seed test organizations with roles
+	// 4. Seed test organizations with roles
 	if err := s.seedOrganizations(ctx); err != nil {
 		return fmt.Errorf("failed to seed organizations: %w", err)
 	}

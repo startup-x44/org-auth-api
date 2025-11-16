@@ -96,16 +96,23 @@ func (s *DatabaseSeeder) seedPermissions(ctx context.Context) error {
 
 		// Organization settings
 		{
-			Name:        "organization:update",
+			Name:        "org:update",
 			DisplayName: "Update Organization",
 			Description: "Update organization settings",
 			Category:    "organization",
 			IsSystem:    true,
 		},
 		{
-			Name:        "organization:delete",
+			Name:        "org:delete",
 			DisplayName: "Delete Organization",
 			Description: "Delete the organization",
+			Category:    "organization",
+			IsSystem:    true,
+		},
+		{
+			Name:        "org:view",
+			DisplayName: "View Organization",
+			Description: "View organization details",
 			Category:    "organization",
 			IsSystem:    true,
 		},

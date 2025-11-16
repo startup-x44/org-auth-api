@@ -15,7 +15,7 @@ type RoleRepository interface {
 	GetByID(ctx context.Context, id string) (*models.Role, error) // DEPRECATED: Use GetByIDAndOrganization for security
 	GetByIDAndOrganization(ctx context.Context, id, orgID string) (*models.Role, error)
 	GetByOrganizationAndName(ctx context.Context, orgID, name string) (*models.Role, error)
-	GetByOrganization(ctx context.Context, orgID string) ([]*models.Role, error)
+	GetByOrganization(ctx context.Context, orgID string, isSuperAdmin bool) ([]*models.Role, error)
 	Update(ctx context.Context, role *models.Role) error
 	DeleteByID(ctx context.Context, id string) error // DEPRECATED: Use DeleteByIDAndOrganization for security
 	DeleteByIDAndOrganization(ctx context.Context, id, orgID string) error
@@ -61,9 +61,12 @@ func (r *roleRepository) GetByIDAndOrganization(ctx context.Context, id, orgID s
 	}
 
 	var role models.Role
+	// Allow both:
+	// 1. System roles (is_system=true, organization_id=NULL) - global roles
+	// 2. Custom org roles (is_system=false, organization_id=orgID) - org-specific roles
 	err = r.db.WithContext(ctx).
 		Preload("Permissions", "organization_id = ? OR (is_system = TRUE AND organization_id IS NULL)", orgUUID).
-		Where("id = ? AND organization_id = ?", roleID, orgUUID).
+		Where("id = ? AND ((is_system = TRUE AND organization_id IS NULL) OR organization_id = ?)", roleID, orgUUID).
 		First(&role).Error
 
 	if err != nil {
@@ -93,19 +96,30 @@ func (r *roleRepository) GetByOrganizationAndName(ctx context.Context, orgID, na
 	return &role, nil
 }
 
-// Secure: roles only for this org
-func (r *roleRepository) GetByOrganization(ctx context.Context, orgID string) ([]*models.Role, error) {
+// Secure: returns system roles (is_system=true) and roles for this org
+func (r *roleRepository) GetByOrganization(ctx context.Context, orgID string, isSuperAdmin bool) ([]*models.Role, error) {
 	orgUUID, err := uuid.Parse(orgID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid organization ID: %w", err)
 	}
 
 	var roles []*models.Role
-	err = r.db.WithContext(ctx).
-		Preload("Permissions", "organization_id = ? OR (is_system = TRUE AND organization_id IS NULL)", orgUUID).
-		Where("organization_id = ?", orgUUID).
-		Order("is_system DESC, name ASC").
-		Find(&roles).Error
+
+	if isSuperAdmin {
+		// SuperAdmin: Return both system roles AND custom org roles
+		err = r.db.WithContext(ctx).
+			Preload("Permissions", "organization_id = ? OR (is_system = TRUE AND organization_id IS NULL)", orgUUID).
+			Where("(is_system = ? AND organization_id IS NULL) OR organization_id = ?", true, orgUUID).
+			Order("is_system DESC, name ASC").
+			Find(&roles).Error
+	} else {
+		// Regular user: Only return custom org roles (is_system=false)
+		err = r.db.WithContext(ctx).
+			Preload("Permissions", "organization_id = ?", orgUUID).
+			Where("organization_id = ? AND is_system = ?", orgUUID, false).
+			Order("name ASC").
+			Find(&roles).Error
+	}
 
 	if err != nil {
 		return nil, err
