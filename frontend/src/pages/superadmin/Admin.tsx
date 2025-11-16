@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import useAuthStore from '@/store/auth'
-import { adminAPI, organizationAPI } from '@/lib/api'
+import { adminAPI } from '@/lib/api'
 import type { User, Organization } from '@/lib/types'
 
 const Admin = () => {

@@ -115,8 +115,6 @@ api.interceptors.response.use(
     return response
   },
   async (error) => {
-    const originalRequest = error.config
-
     // Handle 401 errors
     if (error.response?.status === 401) {
       // Don't logout on login/register endpoints
