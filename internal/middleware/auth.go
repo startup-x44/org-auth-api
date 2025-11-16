@@ -6,19 +6,23 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
+	"auth-service/internal/repository"
 	"auth-service/internal/service"
 )
 
 // AuthMiddleware handles JWT authentication
 type AuthMiddleware struct {
 	authService service.AuthService
+	repo        repository.Repository
 }
 
 // NewAuthMiddleware creates a new auth middleware
-func NewAuthMiddleware(authService service.AuthService) *AuthMiddleware {
+func NewAuthMiddleware(authService service.AuthService, repo repository.Repository) *AuthMiddleware {
 	return &AuthMiddleware{
 		authService: authService,
+		repo:        repo,
 	}
 }
 
@@ -53,6 +57,47 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 		ctx = context.WithValue(ctx, "is_superadmin", claims.IsSuperadmin)
 		c.Request = c.Request.WithContext(ctx)
 
+		c.Next()
+	}
+}
+
+// LoadUser middleware loads the full user object and sets it in Gin context
+// This should be used after AuthRequired middleware
+func (m *AuthMiddleware) LoadUser() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userIDStr, exists := c.Request.Context().Value("user_id").(string)
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "User ID not found in context",
+			})
+			c.Abort()
+			return
+		}
+
+		userID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Invalid user ID format",
+			})
+			c.Abort()
+			return
+		}
+
+		// Get user from repository
+		user, err := m.repo.User().GetByID(c.Request.Context(), userID.String())
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "User not found",
+			})
+			c.Abort()
+			return
+		}
+
+		// Set user in Gin context for handlers to access
+		c.Set("user", user)
 		c.Next()
 	}
 }

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Building2, Sparkles, ArrowLeft, Check, AlertCircle } from 'lucide-react';
-import useAuthStore from '../store/auth';
+import useAuthStore from '@/store/auth';
 import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

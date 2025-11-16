@@ -129,6 +129,10 @@ type Repository interface {
 	RolePermission() RolePermissionRepository
 	Role() RoleRepository
 	Permission() PermissionRepository
+	ClientApp() ClientAppRepository
+	AuthorizationCode() AuthorizationCodeRepository
+	OAuthRefreshToken() OAuthRefreshTokenRepository
+	APIKey() APIKeyRepository
 	CreateDefaultAdminRole(ctx context.Context, orgID, createdBy string) (*models.Role, error)
 	BeginTransaction(ctx context.Context) (Transaction, error)
 }
@@ -148,4 +152,8 @@ type Transaction interface {
 	RolePermission() RolePermissionRepository
 	Role() RoleRepository
 	Permission() PermissionRepository
+	ClientApp() ClientAppRepository
+	AuthorizationCode() AuthorizationCodeRepository
+	OAuthRefreshToken() OAuthRefreshTokenRepository
+	APIKey() APIKeyRepository
 }

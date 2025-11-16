@@ -15,70 +15,30 @@ func (s *DatabaseSeeder) seedUsers(ctx context.Context) error {
 	// Get password service
 	passwordService := password.NewService()
 
-	// Hash passwords
+	// Hash password for superadmin
 	adminPassword, err := passwordService.Hash("Admin123!")
 	if err != nil {
 		return err
 	}
 
-	userPassword, err := passwordService.Hash("User123!")
-	if err != nil {
-		return err
-	}
-
 	users := []models.User{
-		// Super admin user
+		// Super admin user - NO organization required
 		{
-			Email:        "superadmin@platform.com",
-			PasswordHash: adminPassword,
-			IsSuperadmin: true,
-			GlobalRole:   "admin",
-			Firstname:    stringPtr("Super"),
-			Lastname:     stringPtr("Administrator"),
-			Phone:        stringPtr("+1234567890"),
-			Status:       "active",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-		// Regular users for testing
-		{
-			Email:        "john.doe@example.com",
-			PasswordHash: userPassword,
-			IsSuperadmin: false,
-			GlobalRole:   "user",
-			Firstname:    stringPtr("John"),
-			Lastname:     stringPtr("Doe"),
-			Phone:        stringPtr("+1555123456"),
-			Status:       "active",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-		{
-			Email:        "jane.smith@example.com",
-			PasswordHash: userPassword,
-			IsSuperadmin: false,
-			GlobalRole:   "user",
-			Firstname:    stringPtr("Jane"),
-			Lastname:     stringPtr("Smith"),
-			Phone:        stringPtr("+1555987654"),
-			Status:       "active",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		},
-		{
-			Email:        "admin@example.com",
-			PasswordHash: adminPassword,
-			IsSuperadmin: false,
-			GlobalRole:   "user",
-			Firstname:    stringPtr("Admin"),
-			Lastname:     stringPtr("User"),
-			Phone:        stringPtr("+1555111111"),
-			Status:       "active",
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
+			Email:           "superadmin@platform.com",
+			PasswordHash:    adminPassword,
+			IsSuperadmin:    true,
+			GlobalRole:      "superadmin",
+			Firstname:       stringPtr("Super"),
+			Lastname:        stringPtr("Admin"),
+			Phone:           stringPtr("+1234567890"),
+			Status:          "active",
+			EmailVerifiedAt: timePtr(time.Now()), // Superadmin email is pre-verified
+			CreatedAt:       time.Now(),
+			UpdatedAt:       time.Now(),
 		},
 	}
 
+	// Create superadmin user
 	for _, user := range users {
 		// Check if user already exists
 		var existingUser models.User
@@ -91,10 +51,19 @@ func (s *DatabaseSeeder) seedUsers(ctx context.Context) error {
 		}
 	}
 
+	// Note: Regular users should be created through the registration flow
+	// They need organization context which is set up during registration
+	// For testing regular users with organizations, use the organization seeder
+
 	return nil
 }
 
 // stringPtr returns a pointer to a string
 func stringPtr(s string) *string {
 	return &s
+}
+
+// timePtr returns a pointer to a time.Time
+func timePtr(t time.Time) *time.Time {
+	return &t
 }

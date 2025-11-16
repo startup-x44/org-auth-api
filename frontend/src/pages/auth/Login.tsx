@@ -12,7 +12,7 @@ import useAuthStore from '@/store/auth'
 const Login = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { login, error, clearError } = useAuthStore() // Removed 'loading' from store
+  const { login, error, clearError } = useAuthStore()
 
   const emailFromParams = searchParams.get('email')
   const isFromRegistration = searchParams.get('registered') === 'true'
@@ -79,9 +79,19 @@ const Login = () => {
 
       // Successful login
       console.log('✅ Login successful, navigating...')
-      if (result.organizations && result.organizations.length > 0) {
+      console.log('🔍 Result object:', JSON.stringify(result, null, 2))
+      console.log('🔍 result.user:', result.user)
+      console.log('🔍 result.user?.is_superadmin:', result.user?.is_superadmin)
+      
+      // Check if user is superadmin
+      if (result.user?.is_superadmin) {
+        console.log('🔵 User is superadmin, redirecting to /superadmin')
+        navigate('/superadmin', { replace: true })
+      } else if (result.organizations && result.organizations.length > 0) {
+        console.log('🔵 User has organizations, redirecting to /choose-organization')
         navigate('/choose-organization', { replace: true })
       } else {
+        console.log('🔵 User has no organizations, redirecting to /create-organization')
         navigate('/create-organization', { replace: true })
       }
 
@@ -220,6 +230,33 @@ const Login = () => {
                   </>
                 )}
               </Button>
+
+              {/* Development Quick Login */}
+              {import.meta.env.DEV && (
+                <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <p className="text-xs text-slate-500 mb-2 text-center">Development Quick Login</p>
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setFormData({
+                        email: 'superadmin@platform.com',
+                        password: 'Admin123!'
+                      })
+                      // Auto-submit after setting credentials
+                      setTimeout(() => {
+                        const form = document.querySelector('form')
+                        form?.requestSubmit()
+                      }, 100)
+                    }}
+                    disabled={isLoading}
+                    variant="outline"
+                    className="w-full h-10 text-sm border-2 border-purple-300 hover:bg-purple-50 dark:border-purple-700 dark:hover:bg-purple-950"
+                  >
+                    <Sparkles className="mr-2 h-4 w-4 text-purple-600 dark:text-purple-400" />
+                    Quick Login as Superadmin
+                  </Button>
+                </div>
+              )}
             </form>
 
             {/* Footer */}

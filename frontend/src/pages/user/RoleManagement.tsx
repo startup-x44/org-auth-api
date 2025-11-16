@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { Plus, Edit, Trash2, Shield, Users, CheckSquare, Square, AlertTriangle, X, Lock, Minus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Input } from '@/components/ui/input'  
 import { Label } from '@/components/ui/label'
 import { organizationAPI } from '@/lib/api'
 import useAuthStore from '@/store/auth'
 import { useToast } from '@/hooks/useToast'
 import ToastContainer from '@/components/ToastContainer'
 import { RequirePermission } from '@/components/auth/PermissionGate'
-import { usePermission } from '@/hooks/usePermission'
 
 interface Role {
   id: string
@@ -27,16 +26,19 @@ interface Permission {
   description: string
   category: string
   is_system: boolean
+  organization_id?: string
 }
 
 const RoleManagement: React.FC = () => {
-  const { organizationId } = useAuthStore()
+  const { organizationId, hasPermission } = useAuthStore()
   const { toasts, removeToast, showSuccess, showError } = useToast()
-  const canManageRoles = usePermission('role:view')
   const [roles, setRoles] = useState<Role[]>([])
   const [permissions, setPermissions] = useState<Permission[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // Check if user can manage roles - only use proper role permissions
+  const canManageRoles = hasPermission('role:view')
 
   // Role form state
   const [isCreating, setIsCreating] = useState(false)
@@ -93,6 +95,7 @@ const RoleManagement: React.FC = () => {
       setError('')
       const response = await organizationAPI.getRoles(organizationId)
       if (response.success) {
+        // Backend already filters out system roles for non-superadmin users
         setRoles(response.data)
       }
     } catch (error: any) {
@@ -107,6 +110,8 @@ const RoleManagement: React.FC = () => {
     try {
       const response = await organizationAPI.getPermissions(organizationId)
       if (response.success) {
+        // Backend should already return only organization-specific permissions
+        // (system permissions available for assignment + custom org permissions)
         setPermissions(response.data)
       }
     } catch (error: any) {
@@ -200,7 +205,7 @@ const RoleManagement: React.FC = () => {
     }))
   }
 
-  const handleToggleCategory = (category: string, categoryPermissions: Permission[]) => {
+  const handleToggleCategory = (categoryPermissions: Permission[]) => {
     const categoryPermissionNames = categoryPermissions.map(p => p.name)
     
     const allCategorySelected = categoryPermissionNames.every(name => 
@@ -398,11 +403,6 @@ const RoleManagement: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <Shield className="h-5 w-5 text-gray-600" />
                         <h3 className="font-semibold text-gray-900">{role.display_name}</h3>
-                        {role.is_system && (
-                          <span className="px-2 py-0.5 text-xs bg-purple-100 text-purple-700 rounded">
-                            System
-                          </span>
-                        )}
                       </div>
                       <p className="text-sm text-gray-600 mt-1">{role.description}</p>
                       <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
@@ -506,21 +506,17 @@ const RoleManagement: React.FC = () => {
 
                 <div>
                   <Label className="mb-3 block">Permissions</Label>
-                  <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="flex items-center gap-2 text-sm text-blue-800">
-                      <Lock className="h-4 w-4" />
-                      <span className="font-medium">System permissions can be assigned to roles but cannot be modified</span>
-                    </div>
-                  </div>
+                  
                   <div className="max-h-96 overflow-y-auto space-y-4 border rounded-lg p-4">
                     {Object.entries(groupedPermissions).map(([category, perms]) => {
+                      // Backend should already return only available permissions for this organization
                       const categoryState = getCategoryCheckState(perms)
                       return (
                         <div key={category}>
                           <div className="flex items-center gap-2 mb-2">
                             <button
                               type="button"
-                              onClick={() => handleToggleCategory(category, perms)}
+                              onClick={() => handleToggleCategory(perms)}
                               className="flex items-center gap-2 hover:bg-gray-100 p-1 rounded"
                             >
                               {categoryState === 'checked' && <CheckSquare className="h-4 w-4 text-blue-600" />}
@@ -553,15 +549,18 @@ const RoleManagement: React.FC = () => {
                                   <p className="font-medium text-sm text-gray-900">
                                     {permission.display_name}
                                   </p>
-                                  {permission.is_system && (
-                                    <div title="System permission - cannot be modified">
-                                      <Lock className="h-3 w-3 text-gray-400" />
-                                    </div>
+                                  {permission.is_system ? (
+                                    <span className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+                                      System
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 text-xs bg-blue-100 text-blue-600 rounded">
+                                      Custom
+                                    </span>
                                   )}
                                 </div>
                                 <p className="text-xs text-gray-500">
                                   {permission.description}
-                                  {permission.is_system && ' (System permission)'}
                                 </p>
                               </div>
                             </label>
@@ -625,26 +624,22 @@ const RoleManagement: React.FC = () => {
           {!showPermissionForm ? (
             <div className="space-y-4">
               {(() => {
-                // Debug: log permissions to see is_system values
-                console.log('All permissions:', permissions.map(p => ({ name: p.name, is_system: p.is_system })))
-                
+                // Only show truly custom permissions (created by organization) in management section
                 const customCategories = Object.entries(groupedPermissions)
                   .map(([category, perms]) => ({
                     category,
-                    permissions: perms.filter(p => !p.is_system)
+                    permissions: perms.filter(p => !p.is_system && p.organization_id)
                   }))
                   .filter(({ permissions }) => permissions.length > 0)
-                
-                console.log('Custom categories:', customCategories)
                 
                 if (customCategories.length === 0) {
                   return (
                     <div className="text-center py-8">
                       <div className="text-gray-500">
-                        <Lock className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+                        <Shield className="h-12 w-12 mx-auto mb-3 text-gray-300" />
                         <p className="font-medium">No Custom Permissions</p>
-                        <p className="text-sm mt-1">All permissions are system permissions and cannot be modified.</p>
-                        <p className="text-sm text-gray-400 mt-2">Create a new custom permission to get started.</p>
+                        <p className="text-sm mt-1">You haven't created any custom permissions for your organization yet.</p>
+                        <p className="text-sm text-gray-400 mt-2">System permissions are available for role assignment but cannot be managed here.</p>
                       </div>
                     </div>
                   )

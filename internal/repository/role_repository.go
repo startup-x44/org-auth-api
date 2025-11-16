@@ -28,6 +28,10 @@ type RoleRepository interface {
 	GetAllSystemRoles(ctx context.Context) ([]*models.Role, error)
 	GetSystemRoleByName(ctx context.Context, name string) (*models.Role, error)
 
+	// New methods for OAuth2 RBAC integration
+	ListSystemRoles(ctx context.Context) ([]*models.Role, error)
+	ListRolesByOrganizationID(ctx context.Context, orgID uuid.UUID) ([]*models.Role, error)
+
 	// Combined queries for superadmin
 	GetAllRoles(ctx context.Context, includeSystem bool) ([]*models.Role, error)
 }
@@ -283,6 +287,47 @@ func (r *roleRepository) GetAllRoles(ctx context.Context, includeSystem bool) ([
 	}
 
 	err := query.Order("is_system DESC, name ASC").Find(&roles).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return roles, nil
+}
+
+//
+// ─────────────────────────────────────────────
+//   OAUTH2 RBAC INTEGRATION METHODS
+// ─────────────────────────────────────────────
+//
+
+// ListSystemRoles returns ONLY system roles (is_system=true, organization_id IS NULL)
+// Used for superadmin role loading in OAuth2 tokens
+func (r *roleRepository) ListSystemRoles(ctx context.Context) ([]*models.Role, error) {
+	var roles []*models.Role
+	err := r.db.WithContext(ctx).
+		Preload("Permissions").
+		Where("is_system = ? AND organization_id IS NULL", true).
+		Order("name").
+		Find(&roles).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return roles, nil
+}
+
+// ListRolesByOrganizationID returns ONLY custom roles for a specific organization
+// (is_system=false, organization_id=orgID)
+// Does NOT include system roles - use this for org member OAuth2 tokens
+func (r *roleRepository) ListRolesByOrganizationID(ctx context.Context, orgID uuid.UUID) ([]*models.Role, error) {
+	var roles []*models.Role
+	err := r.db.WithContext(ctx).
+		Preload("Permissions", "is_system = ? AND organization_id = ?", false, orgID).
+		Where("is_system = ? AND organization_id = ?", false, orgID).
+		Order("name").
+		Find(&roles).Error
+
 	if err != nil {
 		return nil, err
 	}

@@ -98,26 +98,27 @@ func (h *RoleHandler) CreateRole(c *gin.Context) {
 	orgID := c.Param("orgId")
 	orgUUID, err := uuid.Parse(orgID)
 	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "Invalid organization ID format")
+		h.errorResponse(c, http.StatusBadRequest, "Invalid organization ID")
 		return
 	}
 
 	if !h.checkPermission(c, orgID, "role:create") {
-		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
+		h.errorResponse(c, http.StatusForbidden, "You don't have permission to create roles")
 		return
 	}
 
 	var req service.CreateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Please provide valid role information")
 		return
 	}
 
+	// Set the organization ID from the URL parameter
 	req.OrganizationID = orgUUID
 
 	result, err := h.authService.RoleService().CreateRole(c.Request.Context(), &req)
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Failed to create role. Please check the role details and try again")
 		return
 	}
 
@@ -169,13 +170,13 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 
 	var req service.UpdateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Please provide valid role information")
 		return
 	}
 
 	result, err := h.authService.RoleService().UpdateRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, &req)
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Failed to update role. Please try again")
 		return
 	}
 
@@ -225,8 +226,19 @@ func (h *RoleHandler) ListPermissions(c *gin.Context) {
 		return
 	}
 
-	// FIXED: this now returns global system + org's custom only
-	result, err := h.authService.RoleService().ListAllPermissionsForOrganization(c.Request.Context(), orgUUID)
+	// Check if user is superadmin
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+
+	var result []*service.PermissionResponse
+
+	if isSuperadmin {
+		// Superadmin: show all permissions (system + custom)
+		result, err = h.authService.RoleService().ListAllPermissionsForOrganization(c.Request.Context(), orgUUID)
+	} else {
+		// Non-superadmin: show only custom permissions (is_system = false)
+		result, err = h.authService.RoleService().ListCustomPermissionsForOrganization(c.Request.Context(), orgUUID)
+	}
+
 	if err != nil {
 		h.errorResponse(c, http.StatusInternalServerError, "Failed to load permissions")
 		return

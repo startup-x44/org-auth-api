@@ -24,6 +24,7 @@ type RoleService interface {
 	GetRole(ctx context.Context, roleID uuid.UUID) (*RoleResponse, error)
 	GetRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) (*RoleResponse, error)
 	GetRolesByOrganization(ctx context.Context, orgID uuid.UUID) ([]*RoleResponse, error)
+	ListSystemRoles(ctx context.Context) ([]*RoleResponse, error)
 	UpdateRole(ctx context.Context, roleID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error)
 	UpdateRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error)
 	DeleteRole(ctx context.Context, roleID uuid.UUID) error
@@ -42,6 +43,8 @@ type RoleService interface {
 	ListAllPermissions(ctx context.Context) ([]*PermissionResponse, error)
 	// Organization-scoped permissions (includes system + org-specific)
 	ListAllPermissionsForOrganization(ctx context.Context, orgID uuid.UUID) ([]*PermissionResponse, error)
+	// Organization custom permissions only (for management, excludes system permissions)
+	ListCustomPermissionsForOrganization(ctx context.Context, orgID uuid.UUID) ([]*PermissionResponse, error)
 
 	// Permission CRUD
 	CreatePermission(ctx context.Context, name, displayName, description, category string) (*PermissionResponse, error)
@@ -71,7 +74,7 @@ func NewRoleService(repo repository.Repository, auditLogger *logger.AuditLogger)
 
 // Request/Response types
 type CreateRoleRequest struct {
-	OrganizationID uuid.UUID `json:"organization_id" binding:"required"`
+	OrganizationID uuid.UUID `json:"organization_id,omitempty"` // Set by handler from URL, not required in JSON
 	Name           string    `json:"name" binding:"required"`
 	DisplayName    string    `json:"display_name" binding:"required"`
 	Description    string    `json:"description"`
@@ -264,6 +267,29 @@ func (s *roleService) GetRolesByOrganization(ctx context.Context, orgID uuid.UUI
 	roles, err := s.repo.Role().GetByOrganization(ctx, orgID.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get roles: %w", err)
+	}
+
+	responses := make([]*RoleResponse, len(roles))
+	for i, role := range roles {
+		responses[i] = s.convertToRoleResponse(role)
+
+		// Get permissions for each role
+		permissions, _ := s.GetRolePermissions(ctx, role.ID)
+		responses[i].Permissions = permissions
+
+		// Get member count
+		count, _ := s.repo.Role().CountMembersByRole(ctx, role.ID.String())
+		responses[i].MemberCount = int(count)
+	}
+
+	return responses, nil
+}
+
+// ListSystemRoles retrieves only true system roles (organization_id IS NULL and is_system = true)
+func (s *roleService) ListSystemRoles(ctx context.Context) ([]*RoleResponse, error) {
+	roles, err := s.repo.Role().GetAllSystemRoles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get system roles: %w", err)
 	}
 
 	responses := make([]*RoleResponse, len(roles))
@@ -674,6 +700,31 @@ func (s *roleService) ListAllPermissionsForOrganization(ctx context.Context, org
 			Category:       perm.Category,
 			IsSystem:       perm.IsSystem,
 			OrganizationID: perm.OrganizationID, // Will be nil for system permissions
+		}
+	}
+
+	return responses, nil
+}
+
+// ListCustomPermissionsForOrganization returns only custom permissions created by the organization
+// This excludes system permissions and is used for permission management (not role assignment)
+func (s *roleService) ListCustomPermissionsForOrganization(ctx context.Context, orgID uuid.UUID) ([]*PermissionResponse, error) {
+	// Query only custom permissions for this organization
+	perms, err := s.repo.Permission().ListCustomForOrganization(ctx, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list custom permissions for organization: %w", err)
+	}
+
+	responses := make([]*PermissionResponse, len(perms))
+	for i, perm := range perms {
+		responses[i] = &PermissionResponse{
+			ID:             perm.ID,
+			Name:           perm.Name,
+			DisplayName:    perm.DisplayName,
+			Description:    perm.Description,
+			Category:       perm.Category,
+			IsSystem:       perm.IsSystem, // Will always be false for custom permissions
+			OrganizationID: perm.OrganizationID,
 		}
 	}
 

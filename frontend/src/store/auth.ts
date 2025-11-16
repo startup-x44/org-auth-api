@@ -6,7 +6,8 @@ import { decodeJWT } from '../lib/jwt'
 
 interface AuthStore extends AuthState {
   // Actions
-  login: (email: string, password: string) => Promise<{ success: boolean; message?: string; needsOrgSelection?: boolean; organizations?: any[] }>
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string; needsOrgSelection?: boolean; organizations?: any[]; user?: User }>
+  loginWithOAuthTokens: (tokens: { accessToken: string; refreshToken?: string }) => Promise<{ success: boolean; message?: string }>
   selectOrganization: (organizationId: string) => Promise<{ success: boolean; message?: string }>
   createOrganization: (name: string, slug: string) => Promise<{ success: boolean; message?: string }>
   switchOrganization: (organizationId: string) => Promise<{ success: boolean; message?: string }>
@@ -92,11 +93,46 @@ const useAuthStore = create<AuthStore>()(
           localStorage.setItem('user_global', JSON.stringify(user))
           localStorage.setItem('organizations_temp', JSON.stringify(organizations || []))
           
-          // REMOVED: Don't update loading state here to prevent Zustand persist triggers
-          // Component now manages its own loading state
           console.log('🟢 Login successful - returning result without updating Zustand state')
 
           console.log('Organizations after login:', organizations) // Debug log
+          
+          // Store organizations in Zustand state for ChooseOrganization page
+          set({ organizations: organizations || [], user })
+
+          // For superadmin, immediately set authenticated state (they skip org selection)
+          if (user.is_superadmin) {
+            console.log('🟢 Superadmin detected - setting authenticated state immediately')
+            
+            // Extract tokens from response (backend now returns tokens for superadmin)
+            const token = (response as any).data?.token || response.token
+            
+            if (!token) {
+              console.error('No token in superadmin login response!')
+              const errorMessage = 'Invalid superadmin login - no token received'
+              set({ error: errorMessage })
+              return { success: false, message: errorMessage }
+            }
+
+            console.log('🟢 Setting superadmin tokens:', { 
+              hasAccessToken: !!token.access_token,
+              hasRefreshToken: !!token.refresh_token 
+            })
+            
+            // Store tokens in localStorage for axios interceptor
+            localStorage.setItem('access_token', token.access_token)
+            localStorage.setItem('refresh_token', token.refresh_token)
+            console.log('🟢 Stored tokens in localStorage (no org context for superadmin)')
+            
+            set({
+              user,
+              accessToken: token.access_token,
+              refreshToken: token.refresh_token,
+              isAuthenticated: true,
+              isSuperadmin: true,
+              loading: false,
+            })
+          }
 
           // Check if user has organizations
           if (organizations && organizations.length > 0) {
@@ -110,6 +146,47 @@ const useAuthStore = create<AuthStore>()(
           const errorMessage = error.response?.data?.message || error.message || 'Login failed'
           // Only set error state, not loading state
           set({ error: errorMessage })
+          return { success: false, message: errorMessage }
+        }
+      },
+
+      loginWithOAuthTokens: async (tokens: { accessToken: string; refreshToken?: string }) => {
+        try {
+          set({ loading: true, error: null })
+          
+          // Store tokens in localStorage (similar to existing login flow)
+          localStorage.setItem('access_token', tokens.accessToken)
+          if (tokens.refreshToken) {
+            localStorage.setItem('refresh_token', tokens.refreshToken)
+          }
+
+          // Decode token to get user info (using existing JWT decode utility)
+          const decodedToken = decodeJWT(tokens.accessToken)
+          
+          if (!decodedToken) {
+            throw new Error('Invalid access token')
+          }
+
+          // For OAuth tokens, we need to fetch user info from /oauth/userinfo endpoint
+          // But for now, we'll work with the token claims directly
+          // TODO: Implement proper userinfo endpoint call
+          
+          set({
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken || null,
+            isAuthenticated: true,
+            isSuperadmin: decodedToken.is_superadmin || false,
+            permissions: decodedToken.permissions || [],
+            organizationId: decodedToken.organization_id || null,
+            loading: false,
+            error: null
+          })
+
+          return { success: true }
+        } catch (error: any) {
+          console.error('OAuth token login error:', error)
+          const errorMessage = error.message || 'Failed to authenticate with OAuth tokens'
+          set({ error: errorMessage, loading: false })
           return { success: false, message: errorMessage }
         }
       },

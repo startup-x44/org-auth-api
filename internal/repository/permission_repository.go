@@ -19,8 +19,14 @@ type PermissionRepository interface {
 	GetByNamesAndOrganization(ctx context.Context, names []string, orgID string) ([]*models.Permission, error)
 	ListAll(ctx context.Context) ([]*models.Permission, error)
 	ListAllForOrganization(ctx context.Context, orgID string) ([]*models.Permission, error)
+	ListCustomForOrganization(ctx context.Context, orgID string) ([]*models.Permission, error)
 	ListByCategory(ctx context.Context, category string) ([]*models.Permission, error)
 	ListByCategoryAndOrganization(ctx context.Context, category, orgID string) ([]*models.Permission, error)
+
+	// New methods for OAuth2 RBAC integration
+	ListSystemPermissions(ctx context.Context) ([]*models.Permission, error)
+	ListPermissionsByOrganization(ctx context.Context, orgID uuid.UUID) ([]*models.Permission, error)
+	ListPermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]*models.Permission, error)
 
 	Create(ctx context.Context, permission *models.Permission) (*models.Permission, error)
 	Update(ctx context.Context, permission *models.Permission) (*models.Permission, error)
@@ -203,6 +209,26 @@ func (r *permissionRepository) ListAllForOrganization(ctx context.Context, orgID
 	return perms, nil
 }
 
+// ListCustomForOrganization returns only custom permissions created by the organization (no system permissions)
+func (r *permissionRepository) ListCustomForOrganization(ctx context.Context, orgID string) ([]*models.Permission, error) {
+	orgUUID, err := uuid.Parse(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid organization ID: %w", err)
+	}
+
+	var perms []*models.Permission
+	err = r.db.WithContext(ctx).
+		Where("organization_id = ? AND is_system = ?", orgUUID, false).
+		Order("category, name").
+		Find(&perms).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return perms, nil
+}
+
 func (r *permissionRepository) ListByCategory(ctx context.Context, category string) ([]*models.Permission, error) {
 	var perms []*models.Permission
 	err := r.db.WithContext(ctx).
@@ -235,7 +261,11 @@ func (r *permissionRepository) ListByCategoryAndOrganization(ctx context.Context
 //
 
 // AssignToRole assigns a permission to a role with STRICT ORGANIZATION VALIDATION
-// CRITICAL: This enforces the rule that custom permissions can only be assigned within their organization
+// CRITICAL: This enforces OAuth2 RBAC integration rules:
+// 1. System permissions (is_system=true) can ONLY be assigned to system roles (role.is_system=true)
+// 2. Custom permissions (is_system=false) can ONLY be assigned to custom roles in same org
+// 3. Custom permissions CANNOT be assigned to system roles
+// 4. Permissions from different orgs CANNOT be cross-assigned
 func (r *permissionRepository) AssignToRole(ctx context.Context, roleID, permissionID uuid.UUID) error {
 	// Load the role to get its organization
 	var role models.Role
@@ -249,15 +279,33 @@ func (r *permissionRepository) AssignToRole(ctx context.Context, roleID, permiss
 		return fmt.Errorf("permission not found: %w", err)
 	}
 
-	// CRITICAL SECURITY CHECK: Enforce permission assignment rule
-	// Rule: permission.IsSystem == true OR permission.OrganizationID == role.OrganizationID
+	// CRITICAL SECURITY CHECK 1: System permissions can ONLY be assigned to system roles
+	if permission.IsSystem && !role.IsSystem {
+		return fmt.Errorf("SECURITY VIOLATION: Cannot assign system permission '%s' to custom role '%s'. System permissions can only be assigned to system roles",
+			permission.Name, role.Name)
+	}
+
+	// CRITICAL SECURITY CHECK 2: Custom permissions CANNOT be assigned to system roles
+	if !permission.IsSystem && role.IsSystem {
+		return fmt.Errorf("SECURITY VIOLATION: Cannot assign custom permission '%s' to system role '%s'. Custom permissions can only be assigned to custom roles",
+			permission.Name, role.Name)
+	}
+
+	// CRITICAL SECURITY CHECK 3: Custom permissions must belong to same organization as role
 	if !permission.IsSystem {
-		if permission.OrganizationID == nil || role.OrganizationID == nil || *permission.OrganizationID != *role.OrganizationID {
-			return fmt.Errorf("SECURITY VIOLATION: Permission %s (org: %v) cannot be assigned to role %s (org: %v)",
-				permission.Name, permission.OrganizationID, role.Name, role.OrganizationID)
+		if permission.OrganizationID == nil {
+			return fmt.Errorf("SECURITY VIOLATION: Custom permission '%s' has no organization but is not marked as system", permission.Name)
+		}
+		if role.OrganizationID == nil {
+			return fmt.Errorf("SECURITY VIOLATION: Custom role '%s' has no organization but is not marked as system", role.Name)
+		}
+		if *permission.OrganizationID != *role.OrganizationID {
+			return fmt.Errorf("SECURITY VIOLATION: Cannot assign permission '%s' (org: %s) to role '%s' (org: %s) from different organization",
+				permission.Name, permission.OrganizationID.String(), role.Name, role.OrganizationID.String())
 		}
 	}
 
+	// All security checks passed - create the assignment
 	return r.db.WithContext(ctx).Create(&models.RolePermission{
 		RoleID:       roleID,
 		PermissionID: permissionID,
@@ -321,4 +369,60 @@ func (r *permissionRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).
 		Where("id = ?", id).
 		Delete(&models.Permission{}).Error
+}
+
+//
+// ─────────────────────────────────────────────
+//   OAUTH2 RBAC INTEGRATION METHODS
+// ─────────────────────────────────────────────
+//
+
+// ListSystemPermissions returns ONLY system permissions (is_system=true, organization_id IS NULL)
+// Used for superadmin OAuth2 tokens
+func (r *permissionRepository) ListSystemPermissions(ctx context.Context) ([]*models.Permission, error) {
+	var perms []*models.Permission
+	err := r.db.WithContext(ctx).
+		Where("is_system = ? AND organization_id IS NULL", true).
+		Order("category, name").
+		Find(&perms).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return perms, nil
+}
+
+// ListPermissionsByOrganization returns ONLY custom permissions for a specific organization
+// (is_system=false, organization_id=orgID)
+// Does NOT include system permissions - use this for org member OAuth2 tokens
+func (r *permissionRepository) ListPermissionsByOrganization(ctx context.Context, orgID uuid.UUID) ([]*models.Permission, error) {
+	var perms []*models.Permission
+	err := r.db.WithContext(ctx).
+		Where("is_system = ? AND organization_id = ?", false, orgID).
+		Order("category, name").
+		Find(&perms).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return perms, nil
+}
+
+// ListPermissionsForRole returns all permissions assigned to a specific role
+// Used to build permission list for OAuth2 tokens based on user's roles
+func (r *permissionRepository) ListPermissionsForRole(ctx context.Context, roleID uuid.UUID) ([]*models.Permission, error) {
+	var perms []*models.Permission
+	err := r.db.WithContext(ctx).
+		Joins("INNER JOIN role_permissions ON role_permissions.permission_id = permissions.id").
+		Where("role_permissions.role_id = ?", roleID).
+		Order("category, name").
+		Find(&perms).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return perms, nil
 }

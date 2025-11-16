@@ -58,18 +58,28 @@ func main() {
 	userSvc.SetRedisClient(redisClient)
 	userSvc.SetEmailService(emailSvc)
 
+	// Initialize OAuth2 services
+	clientAppService := service.NewClientAppService(repo)
+	oauth2Service := service.NewOAuth2Service(repo, jwtService)
+	apiKeyService := service.NewAPIKeyService(repo.APIKey())
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	adminHandler := handler.NewAdminHandler(authService)
 	organizationHandler := handler.NewOrganizationHandler(authService)
 	roleHandler := handler.NewRoleHandler(authService)
+	rbacHandler := handler.NewRBACHandler(authService.RoleService())
+	clientAppHandler := handler.NewClientAppHandler(clientAppService)
+	oauth2Handler := handler.NewOAuth2Handler(oauth2Service, clientAppService, userSvc)
+	oauthAuditHandler := handler.NewOAuthAuditHandler(db)
+	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 
 	// Initialize middleware
-	authMiddleware := middleware.NewAuthMiddleware(authService)
+	authMiddleware := middleware.NewAuthMiddleware(authService, repo)
 	organizationMiddleware := middleware.NewOrganizationMiddleware(authService)
 
 	// Initialize Gin router
-	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, roleHandler, authMiddleware, organizationMiddleware)
+	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, roleHandler, rbacHandler, clientAppHandler, oauth2Handler, oauthAuditHandler, apiKeyHandler, authMiddleware, organizationMiddleware)
 
 	// Start server
 	srv := &http.Server{
@@ -149,7 +159,7 @@ func runSeeders(db *gorm.DB) error {
 	return seeder.Seed(ctx)
 }
 
-func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, roleHandler *handler.RoleHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware) *gin.Engine {
+func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, roleHandler *handler.RoleHandler, rbacHandler *handler.RBACHandler, clientAppHandler *handler.ClientAppHandler, oauth2Handler *handler.OAuth2Handler, oauthAuditHandler *handler.OAuthAuditHandler, apiKeyHandler *handler.APIKeyHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware) *gin.Engine {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -222,20 +232,20 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 
 			// Organization roles
 			org.GET("/:orgId/roles", organizationMiddleware.MembershipRequired(""), organizationHandler.GetOrganizationRoles)
-			org.POST("/:orgId/roles", organizationMiddleware.OrgAdminRequired(), roleHandler.CreateRole)
+			org.POST("/:orgId/roles", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:create"), roleHandler.CreateRole)
 			org.GET("/:orgId/roles/:roleId", organizationMiddleware.MembershipRequired(""), roleHandler.GetRole)
-			org.PUT("/:orgId/roles/:roleId", organizationMiddleware.OrgAdminRequired(), roleHandler.UpdateRole)
-			org.DELETE("/:orgId/roles/:roleId", organizationMiddleware.OrgAdminRequired(), roleHandler.DeleteRole)
+			org.PUT("/:orgId/roles/:roleId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:update"), roleHandler.UpdateRole)
+			org.DELETE("/:orgId/roles/:roleId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:delete"), roleHandler.DeleteRole)
 
 			// Role permissions
-			org.POST("/:orgId/roles/:roleId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.AssignPermissions)
-			org.DELETE("/:orgId/roles/:roleId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.RevokePermissions)
+			org.POST("/:orgId/roles/:roleId/permissions", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:update"), roleHandler.AssignPermissions)
+			org.DELETE("/:orgId/roles/:roleId/permissions", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:update"), roleHandler.RevokePermissions)
 
 			// List all available permissions
 			org.GET("/:orgId/permissions", organizationMiddleware.MembershipRequired(""), roleHandler.ListPermissions)
-			org.POST("/:orgId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.CreatePermission)
-			org.PUT("/:orgId/permissions/:permission_id", organizationMiddleware.OrgAdminRequired(), roleHandler.UpdatePermission)
-			org.DELETE("/:orgId/permissions/:permission_id", organizationMiddleware.OrgAdminRequired(), roleHandler.DeletePermission)
+			org.POST("/:orgId/permissions", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("permission:create"), roleHandler.CreatePermission)
+			org.PUT("/:orgId/permissions/:permission_id", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("permission:update"), roleHandler.UpdatePermission)
+			org.DELETE("/:orgId/permissions/:permission_id", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("permission:delete"), roleHandler.DeletePermission)
 
 			// Organization invitations
 			org.GET("/:orgId/invitations", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("invitation:view"), organizationHandler.GetOrganizationInvitations)
@@ -256,6 +266,7 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		// Protected admin routes (superadmin only)
 		admin := v1.Group("/admin")
 		admin.Use(authMiddleware.AuthRequired())
+		admin.Use(authMiddleware.LoadUser())
 		admin.Use(authMiddleware.AdminRequired())
 		{
 			// Global user management
@@ -263,6 +274,73 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			admin.PUT("/users/:userId/activate", adminHandler.ActivateUser)
 			admin.PUT("/users/:userId/deactivate", adminHandler.DeactivateUser)
 			admin.DELETE("/users/:userId", adminHandler.DeleteUser)
+
+			// Global organization management
+			admin.GET("/organizations", adminHandler.ListOrganizations)
+
+			// RBAC management (superadmin only)
+			rbac := admin.Group("/rbac")
+			{
+				// Permissions
+				rbac.GET("/permissions", rbacHandler.ListAllPermissions)
+
+				// System roles
+				rbac.GET("/roles", rbacHandler.ListSystemRoles)
+				rbac.POST("/roles", rbacHandler.CreateSystemRole)
+				rbac.GET("/roles/:id", rbacHandler.GetSystemRole)
+				rbac.PUT("/roles/:id", rbacHandler.UpdateSystemRole)
+				rbac.DELETE("/roles/:id", rbacHandler.DeleteSystemRole)
+
+				// Role permissions
+				rbac.GET("/roles/:id/permissions", rbacHandler.GetRolePermissions)
+				rbac.POST("/roles/:id/permissions", rbacHandler.AssignPermissionsToRole)
+				rbac.DELETE("/roles/:id/permissions", rbacHandler.RevokePermissionsFromRole)
+
+				// Statistics
+				rbac.GET("/stats", rbacHandler.GetRBACStats)
+			}
+
+			// Client application management (superadmin only)
+			admin.POST("/client-apps", clientAppHandler.CreateClientApp)
+			admin.GET("/client-apps", clientAppHandler.ListClientApps)
+			admin.GET("/client-apps/:id", clientAppHandler.GetClientApp)
+			admin.PUT("/client-apps/:id", clientAppHandler.UpdateClientApp)
+			admin.DELETE("/client-apps/:id", clientAppHandler.DeleteClientApp)
+			admin.POST("/client-apps/:id/rotate-secret", clientAppHandler.RotateClientSecret)
+		}
+
+		// OAuth2 endpoints (public/authenticated as needed)
+		oauth := v1.Group("/oauth")
+		{
+			// Authorization endpoint (requires authentication)
+			oauth.GET("/authorize", authMiddleware.AuthRequired(), oauth2Handler.Authorize)
+
+			// Token endpoint (public - validates client credentials)
+			oauth.POST("/token", oauth2Handler.Token)
+
+			// UserInfo endpoint (requires valid OAuth2 access token)
+			oauth.GET("/userinfo", authMiddleware.AuthRequired(), oauth2Handler.UserInfo)
+
+			// Logout endpoint (requires authentication)
+			oauth.POST("/logout", authMiddleware.AuthRequired(), oauth2Handler.Logout)
+
+			// Audit endpoints (superadmin only)
+			audit := oauth.Group("/audit")
+			audit.Use(authMiddleware.AuthRequired())
+			audit.Use(authMiddleware.LoadUser())
+			audit.Use(authMiddleware.AdminRequired())
+			{
+				audit.GET("/authorizations", oauthAuditHandler.ListAuthorizationLogs)
+				audit.GET("/tokens", oauthAuditHandler.ListTokenGrants)
+				audit.GET("/stats", oauthAuditHandler.GetAuditStats)
+			}
+		}
+
+		// Developer API endpoints (protected routes)
+		dev := v1.Group("/dev")
+		dev.Use(authMiddleware.AuthRequired())
+		{
+			handler.RegisterAPIKeyRoutes(dev, apiKeyHandler)
 		}
 	}
 

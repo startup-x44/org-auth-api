@@ -23,6 +23,13 @@ export interface Organization {
   description?: string
   status: string
   created_by: string
+  owner?: {
+    id: string
+    email: string
+    first_name: string
+    last_name: string
+  }
+  member_count: number
   created_at: string
   updated_at: string
 }

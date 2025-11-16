@@ -103,6 +103,7 @@ type LoginGlobalRequest struct {
 type LoginGlobalResponse struct {
 	User          *UserProfile              `json:"user"`
 	Organizations []*OrganizationMembership `json:"organizations"`
+	Token         *TokenPair                `json:"token,omitempty"` // For superadmin only
 }
 
 // --- SELECT ORGANIZATION (get org-scoped token) ---
@@ -490,9 +491,46 @@ func (s *userService) LoginGlobal(ctx context.Context, req *LoginGlobalRequest) 
 		})
 	}
 
+	// For superadmin, issue tokens immediately (they skip org selection)
+	var tokenPair *TokenPair
+	if user.IsSuperadmin {
+		// Generate superadmin token with system-wide access
+		sessionID := uuid.New()
+		tokenCtx := &jwt.TokenContext{
+			UserID:           user.ID,
+			OrganizationID:   uuid.Nil, // No organization context for superadmin
+			SessionID:        sessionID,
+			RoleID:           uuid.Nil,
+			Email:            user.Email,
+			GlobalRole:       user.GlobalRole,
+			OrganizationRole: "",
+			Permissions:      []string{"*"}, // All permissions for superadmin
+			IsSuperadmin:     true,
+		}
+
+		accessToken, err := s.jwtService.GenerateAccessToken(tokenCtx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate access token: %w", err)
+		}
+
+		refreshToken, _, err := s.jwtService.GenerateRefreshToken(tokenCtx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate refresh token: %w", err)
+		}
+
+		tokenPair = &TokenPair{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			TokenType:    "Bearer",
+			ExpiresIn:    3600, // 1 hour
+			SessionID:    sessionID.String(),
+		}
+	}
+
 	return &LoginGlobalResponse{
 		User:          s.convertToUserProfile(user),
 		Organizations: orgDTOs,
+		Token:         tokenPair,
 	}, nil
 }
 

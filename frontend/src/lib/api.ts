@@ -115,6 +115,9 @@ export const organizationAPI = {
   getPermissions: (orgId: string): Promise<ApiSuccess<any[]>> =>
     api.get(`/organizations/${orgId}/permissions`).then(res => res.data),
 
+  getCustomPermissions: (orgId: string): Promise<ApiSuccess<any[]>> =>
+    api.get(`/organizations/${orgId}/permissions?management=true`).then(res => res.data),
+
   createPermission: (orgId: string, data: { name: string; description?: string }): Promise<ApiSuccess> =>
     api.post(`/organizations/${orgId}/permissions`, data).then(res => res.data),
 
@@ -148,6 +151,112 @@ export const adminAPI = {
 
   deleteUser: (userId: string): Promise<ApiSuccess> =>
     api.delete(`/admin/users/${userId}`).then(res => res.data),
+
+  listOrganizations: (): Promise<ApiSuccess<Organization[]>> =>
+    api.get('/admin/organizations').then(res => res.data),
+}
+
+// RBAC API functions (superadmin only)
+export const rbacAPI = {
+  // Permissions
+  listPermissions: (): Promise<ApiSuccess<any[]>> =>
+    api.get('/admin/rbac/permissions').then(res => res.data),
+
+  // System roles
+  listRoles: (): Promise<ApiSuccess<any[]>> =>
+    api.get('/admin/rbac/roles').then(res => res.data),
+
+  createRole: (data: {
+    name: string
+    display_name: string
+    description: string
+    permissions?: string[]
+  }): Promise<ApiSuccess<any>> =>
+    api.post('/admin/rbac/roles', data).then(res => res.data),
+
+  getRole: (id: string): Promise<ApiSuccess<any>> =>
+    api.get(`/admin/rbac/roles/${id}`).then(res => res.data),
+
+  updateRole: (id: string, data: {
+    display_name?: string
+    description?: string
+  }): Promise<ApiSuccess<any>> =>
+    api.put(`/admin/rbac/roles/${id}`, data).then(res => res.data),
+
+  deleteRole: (id: string): Promise<ApiSuccess> =>
+    api.delete(`/admin/rbac/roles/${id}`).then(res => res.data),
+
+  // Role permissions
+  getRolePermissions: (roleId: string): Promise<ApiSuccess<string[]>> =>
+    api.get(`/admin/rbac/roles/${roleId}/permissions`).then(res => res.data),
+
+  assignPermissions: (roleId: string, permissionNames: string[]): Promise<ApiSuccess> =>
+    api.post(`/admin/rbac/roles/${roleId}/permissions`, { permission_names: permissionNames }).then(res => res.data),
+
+  revokePermissions: (roleId: string, permissionNames: string[]): Promise<ApiSuccess> =>
+    api.delete(`/admin/rbac/roles/${roleId}/permissions`, { data: { permission_names: permissionNames } }).then(res => res.data),
+
+  // Statistics
+  getStats: (): Promise<ApiSuccess<{
+    total_permissions: number
+    system_permissions: number
+    custom_permissions: number
+    system_roles: number
+  }>> =>
+    api.get('/admin/rbac/stats').then(res => res.data),
+}
+
+// OAuth2 Client App API functions (superadmin only)
+export const clientAppAPI = {
+  listClientApps: (params?: { limit?: number; offset?: number }): Promise<ApiSuccess<any>> =>
+    api.get('/admin/client-apps', { params }).then(res => res.data),
+
+  getClientApp: (id: string): Promise<ApiSuccess<any>> =>
+    api.get(`/admin/client-apps/${id}`).then(res => res.data),
+
+  createClientApp: (data: {
+    name: string
+    description?: string
+    redirect_uris: string[]
+    allowed_scopes?: string[]
+  }): Promise<ApiSuccess<any>> =>
+    api.post('/admin/client-apps', data).then(res => res.data),
+
+  updateClientApp: (id: string, data: {
+    name?: string
+    description?: string
+    redirect_uris?: string[]
+    allowed_scopes?: string[]
+  }): Promise<ApiSuccess<any>> =>
+    api.put(`/admin/client-apps/${id}`, data).then(res => res.data),
+
+  deleteClientApp: (id: string): Promise<ApiSuccess> =>
+    api.delete(`/admin/client-apps/${id}`).then(res => res.data),
+
+  rotateSecret: (id: string): Promise<ApiSuccess<{ client_secret: string }>> =>
+    api.post(`/admin/client-apps/${id}/rotate-secret`).then(res => res.data),
+}
+
+// OAuth Audit API functions (superadmin only)
+export const oauthAuditAPI = {
+  listAuthorizations: (params?: {
+    limit?: number
+    offset?: number
+    client_id?: string
+    user_id?: string
+  }): Promise<ApiSuccess<any>> =>
+    api.get('/oauth/audit/authorizations', { params }).then(res => res.data),
+
+  listTokens: (params?: {
+    limit?: number
+    offset?: number
+    client_id?: string
+    user_id?: string
+  }): Promise<ApiSuccess<any>> =>
+    api.get('/oauth/audit/tokens', { params }).then(res => res.data),
+
+  getStats: (): Promise<ApiSuccess<any>> =>
+    api.get('/oauth/audit/stats').then(res => res.data),
 }
 
 // Health check

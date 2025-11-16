@@ -119,56 +119,40 @@ api.interceptors.response.use(
 
     // Handle 401 errors
     if (error.response?.status === 401) {
-      // If already retried, redirect to login
-      if (originalRequest._retry) {
-        localStorage.clear()
-        window.location.href = '/login'
+      // Don't logout on login/register endpoints
+      const isAuthEndpoint = error.config?.url?.includes('/auth/login') || 
+                            error.config?.url?.includes('/auth/register')
+      
+      if (isAuthEndpoint) {
+        // Just return the error for auth endpoints (let component handle it)
         return Promise.reject(error)
       }
-
-      // Try to refresh token
-      originalRequest._retry = true
-
-      try {
-        const organizationId = localStorage.getItem('organization_id')
-        let refreshToken = null
-        
-        if (organizationId) {
-          refreshToken = localStorage.getItem(`refresh_token_${organizationId}`)
+      
+      // For protected routes, clear everything and logout
+      console.log('🔴 401 Unauthorized - Clearing localStorage and redirecting to login')
+      
+      // Clear all authentication data
+      localStorage.removeItem('auth-storage') // Zustand persisted state
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      localStorage.removeItem('organization_id')
+      localStorage.removeItem('user_global')
+      localStorage.removeItem('organizations_temp')
+      
+      // Clear all org-specific tokens
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('access_token_') || key.startsWith('refresh_token_')) {
+          localStorage.removeItem(key)
         }
-        if (!refreshToken) {
-          refreshToken = localStorage.getItem('refresh_token')
-        }
-        
-        if (refreshToken) {
-          const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
-          const response: AxiosResponse = await axios.post(
-            `${baseURL}/api/v1/auth/refresh`,
-            { refresh_token: refreshToken }
-          )
-
-          const { access_token, refresh_token: new_refresh_token } = response.data.data.token
-
-          if (organizationId) {
-            localStorage.setItem(`access_token_${organizationId}`, access_token)
-            localStorage.setItem(`refresh_token_${organizationId}`, new_refresh_token)
-          } else {
-            localStorage.setItem('access_token', access_token)
-            localStorage.setItem('refresh_token', new_refresh_token)
-          }
-
-          originalRequest.headers.Authorization = `Bearer ${access_token}`
-          return api(originalRequest)
-        } else {
-          localStorage.clear()
-          window.location.href = '/login'
-          return Promise.reject(error)
-        }
-      } catch (refreshError) {
-        localStorage.clear()
-        window.location.href = '/login'
-        return Promise.reject(refreshError)
-      }
+      })
+      
+      // Clear session storage
+      sessionStorage.clear()
+      
+      // Redirect to login
+      window.location.href = '/login'
+      
+      return Promise.reject(error)
     }
 
     return Promise.reject(error)

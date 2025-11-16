@@ -14,6 +14,7 @@ import (
 // PasswordService defines the interface for password operations
 type PasswordService interface {
 	Hash(password string) (string, error)
+	HashWithoutValidation(password string) (string, error)
 	Verify(password, hash string) (bool, error)
 	ValidatePassword(password string) error
 }
@@ -29,10 +30,10 @@ type Service struct {
 // NewService creates a new password service with Argon2id parameters
 func NewService() *Service {
 	return &Service{
-		time:    1,        // Number of iterations
+		time:    1,         // Number of iterations
 		memory:  64 * 1024, // 64 MB
-		threads: 4,        // Number of threads
-		keyLen:  32,       // Length of the hash
+		threads: 4,         // Number of threads
+		keyLen:  32,        // Length of the hash
 	}
 }
 
@@ -42,6 +43,12 @@ func (s *Service) Hash(password string) (string, error) {
 		return "", err
 	}
 
+	return s.HashWithoutValidation(password)
+}
+
+// HashWithoutValidation generates a hash from a password without validation
+// This is useful for API keys and other machine-generated secrets
+func (s *Service) HashWithoutValidation(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("failed to generate salt: %w", err)

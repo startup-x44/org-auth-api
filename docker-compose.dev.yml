@@ -28,8 +28,13 @@ services:
       - RATE_LIMIT_REQUESTS=100
       - RATE_LIMIT_WINDOW=60
     volumes:
-      # Mount source code for live reload
-      - .:/app
+      # Mount only Go source code for live reload (exclude frontend)
+      - ./cmd:/app/cmd
+      - ./internal:/app/internal
+      - ./pkg:/app/pkg
+      - ./migrations:/app/migrations
+      - ./go.mod:/app/go.mod
+      - ./go.sum:/app/go.sum
       # Exclude tmp directory from mounting to avoid conflicts
       - /app/tmp
     depends_on:

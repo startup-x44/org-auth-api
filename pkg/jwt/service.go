@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"auth-service/internal/config"
@@ -17,6 +18,7 @@ import (
 type JWTService interface {
 	GenerateAccessToken(ctx *TokenContext) (string, error)
 	GenerateRefreshToken(ctx *TokenContext) (string, string, error)
+	GenerateOAuthAccessToken(ctx *OAuthTokenContext) (string, error)
 	ValidateToken(tokenString string) (*Claims, error)
 	ParseAccessToken(tokenString string) (*Claims, error)
 	ParseRefreshToken(tokenString string) (*Claims, error)
@@ -35,18 +37,34 @@ type TokenContext struct {
 	IsSuperadmin     bool
 }
 
+// OAuthTokenContext carries metadata for OAuth2 token generation
+type OAuthTokenContext struct {
+	UserID         uuid.UUID
+	Email          string
+	OrganizationID *uuid.UUID // Optional
+	Roles          []string   // User's role names in the organization
+	Permissions    []string   // Scopes/permissions
+	Issuer         string     // https://auth.myservice.com/{client_id}
+	Audience       string     // client_id
+	Subject        string     // user_id
+	IsSuperadmin   bool
+}
+
 // Claims represents the JWT claims stored in access/refresh tokens
 type Claims struct {
-	UserID           uuid.UUID `json:"user_id"`
-	OrganizationID   uuid.UUID `json:"organization_id"`
-	SessionID        uuid.UUID `json:"session_id"`
-	RoleID           uuid.UUID `json:"role_id"`
-	Email            string    `json:"email"`
-	GlobalRole       string    `json:"global_role"`
-	OrganizationRole string    `json:"organization_role"`
-	Permissions      []string  `json:"permissions"` // Cached permission names
-	IsSuperadmin     bool      `json:"is_superadmin"`
-	TokenType        string    `json:"token_type"`
+	UserID           uuid.UUID  `json:"user_id"`
+	OrganizationID   uuid.UUID  `json:"organization_id,omitempty"`
+	SessionID        uuid.UUID  `json:"session_id,omitempty"`
+	RoleID           uuid.UUID  `json:"role_id,omitempty"`
+	Email            string     `json:"email"`
+	GlobalRole       string     `json:"global_role,omitempty"`
+	OrganizationRole string     `json:"organization_role,omitempty"`
+	Roles            []string   `json:"roles,omitempty"`       // OAuth2 role names
+	Permissions      []string   `json:"permissions,omitempty"` // Cached permission names
+	Scope            string     `json:"scope,omitempty"`       // OAuth2 scopes (space-separated)
+	IsSuperadmin     bool       `json:"is_superadmin"`
+	TokenType        string     `json:"token_type"`
+	Org              *uuid.UUID `json:"org,omitempty"` // OAuth2 org claim
 	jwt.RegisteredClaims
 }
 
@@ -95,6 +113,39 @@ func (s *Service) GenerateAccessToken(ctxInput *TokenContext) (string, error) {
 			Issuer:    s.config.Issuer,
 			Subject:   ctxInput.UserID.String(),
 			Audience:  jwt.ClaimStrings{"auth-service"},
+			ExpiresAt: jwt.NewNumericDate(exp),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ID:        uuid.New().String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	return token.SignedString(s.privateKey)
+}
+
+// GenerateOAuthAccessToken creates an OAuth2-compliant access token with iss, aud, scope, roles, permissions
+func (s *Service) GenerateOAuthAccessToken(ctxInput *OAuthTokenContext) (string, error) {
+	if ctxInput == nil {
+		return "", errors.New("token context is required")
+	}
+
+	now := time.Now()
+	exp := now.Add(1 * time.Hour) // OAuth tokens typically 1 hour
+
+	claims := &Claims{
+		UserID:       ctxInput.UserID,
+		Email:        ctxInput.Email,
+		IsSuperadmin: ctxInput.IsSuperadmin,
+		TokenType:    "access",
+		Roles:        ctxInput.Roles,                          // RBAC role names
+		Permissions:  ctxInput.Permissions,                    // RBAC permission names
+		Scope:        strings.Join(ctxInput.Permissions, " "), // OAuth2 scope (space-separated permissions)
+		Org:          ctxInput.OrganizationID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    ctxInput.Issuer,                     // https://auth.myservice.com/{client_id}
+			Subject:   ctxInput.Subject,                    // user_id
+			Audience:  jwt.ClaimStrings{ctxInput.Audience}, // client_id
 			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),

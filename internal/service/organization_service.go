@@ -26,6 +26,7 @@ type OrganizationService interface {
 	UpdateOrganization(ctx context.Context, orgID string, req *UpdateOrganizationRequest) (*OrganizationResponse, error)
 	DeleteOrganization(ctx context.Context, orgID string) error
 	ListUserOrganizations(ctx context.Context, userID string) ([]*OrganizationResponse, error)
+	ListAllOrganizations(ctx context.Context) ([]*OrganizationResponse, error) // Admin only
 
 	// Membership management
 	InviteUser(ctx context.Context, req *InviteUserRequest) (*models.OrganizationInvitation, error)
@@ -51,15 +52,24 @@ type CreateOrganizationRequest struct {
 
 // OrganizationResponse represents organization response
 type OrganizationResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Slug        string    `json:"slug"`
-	Description *string   `json:"description"`
-	Status      string    `json:"status"`
-	CreatedBy   string    `json:"created_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	MemberCount int       `json:"member_count"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Slug        string     `json:"slug"`
+	Description *string    `json:"description"`
+	Status      string     `json:"status"`
+	CreatedBy   string     `json:"created_by"`
+	Owner       *OwnerInfo `json:"owner,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	MemberCount int        `json:"member_count"`
+}
+
+// OwnerInfo represents organization owner information
+type OwnerInfo struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 // UpdateOrganizationRequest represents organization update request
@@ -255,6 +265,22 @@ func (s *organizationService) ListUserOrganizations(ctx context.Context, userID 
 	orgs, err := s.repo.Organization().GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list organizations: %w", err)
+	}
+
+	responses := make([]*OrganizationResponse, len(orgs))
+	for i, org := range orgs {
+		responses[i] = s.convertToOrganizationResponse(ctx, org)
+	}
+
+	return responses, nil
+}
+
+// ListAllOrganizations lists all organizations (admin only)
+func (s *organizationService) ListAllOrganizations(ctx context.Context) ([]*OrganizationResponse, error) {
+	// Use a high limit to get all organizations for admin
+	orgs, err := s.repo.Organization().List(ctx, 1000, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all organizations: %w", err)
 	}
 
 	responses := make([]*OrganizationResponse, len(orgs))
@@ -782,6 +808,26 @@ func (s *organizationService) generateSlug(name string) string {
 func (s *organizationService) convertToOrganizationResponse(ctx context.Context, org *models.Organization) *OrganizationResponse {
 	memberCount, _ := s.repo.OrganizationMembership().CountByOrganization(ctx, org.ID.String())
 
+	// Get owner information
+	var owner *OwnerInfo
+	if creator, err := s.repo.User().GetByID(ctx, org.CreatedBy.String()); err == nil {
+		firstName := ""
+		lastName := ""
+		if creator.Firstname != nil {
+			firstName = *creator.Firstname
+		}
+		if creator.Lastname != nil {
+			lastName = *creator.Lastname
+		}
+
+		owner = &OwnerInfo{
+			ID:        creator.ID.String(),
+			Email:     creator.Email,
+			FirstName: firstName,
+			LastName:  lastName,
+		}
+	}
+
 	return &OrganizationResponse{
 		ID:          org.ID.String(),
 		Name:        org.Name,
@@ -789,6 +835,7 @@ func (s *organizationService) convertToOrganizationResponse(ctx context.Context,
 		Description: org.Description,
 		Status:      org.Status,
 		CreatedBy:   org.CreatedBy.String(),
+		Owner:       owner,
 		CreatedAt:   org.CreatedAt,
 		UpdatedAt:   org.UpdatedAt,
 		MemberCount: int(memberCount),

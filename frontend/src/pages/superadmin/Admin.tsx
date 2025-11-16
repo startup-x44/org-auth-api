@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import  { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Users, Building, Shield, Search, UserCheck, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Users, Building, Shield, Search, UserCheck, AlertCircle, Key, Book, Activity } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -46,11 +46,21 @@ const Admin = () => {
 
       const [usersResponse, orgsResponse] = await Promise.all([
         adminAPI.listUsers(),
-        organizationAPI.listOrganizations()
+        adminAPI.listOrganizations()
       ])
 
-      setUsers(usersResponse.data || [])
-      setOrganizations(orgsResponse.data || [])
+      console.log('Admin.tsx - API responses:', { usersResponse, orgsResponse })
+
+      // Ensure we have arrays - API returns { users: [...], total: ... } structure for users
+      const usersResponseData = usersResponse as any
+      const usersData = Array.isArray(usersResponseData.users) ? usersResponseData.users :
+                       (usersResponseData.data?.users || [])
+      const orgsData = Array.isArray(orgsResponse.data) ? orgsResponse.data : []
+
+      console.log('Admin.tsx - Processed data:', { usersData, orgsData })
+
+      setUsers(usersData)
+      setOrganizations(orgsData)
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load admin data'
       setError(errorMessage)
@@ -73,13 +83,13 @@ const Admin = () => {
     return new Date(dateString).toLocaleDateString()
   }
 
-  const filteredUsers = users.filter(user =>
+  const filteredUsers = (users || []).filter(user =>
     user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const filteredOrganizations = organizations.filter(org =>
+  const filteredOrganizations = (organizations || []).filter(org =>
     org.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     org.slug.toLowerCase().includes(searchTerm.toLowerCase())
   )
@@ -203,6 +213,69 @@ const Admin = () => {
             </Card>
           </div>
 
+          {/* Quick Actions */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>Superadmin tools and configurations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <Button
+                  variant="outline"
+                  className="justify-start h-auto py-4 px-6"
+                  onClick={() => navigate('/oauth/client-apps')}
+                >
+                  <div className="flex items-start space-x-4">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Key className="h-6 w-6 text-primary" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-semibold">OAuth Client Apps</div>
+                      <div className="text-sm text-muted-foreground">
+                        Manage OAuth2 client applications
+                      </div>
+                    </div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="justify-start h-auto py-4 px-6"
+                  onClick={() => navigate('/oauth/audit')}
+                >
+                  <div className="flex items-start space-x-4">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Activity className="h-6 w-6 text-primary" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-semibold">OAuth Audit Logs</div>
+                      <div className="text-sm text-muted-foreground">
+                        Monitor authorization flows and tokens
+                      </div>
+                    </div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="justify-start h-auto py-4 px-6"
+                  onClick={() => navigate('/developer/docs')}
+                >
+                  <div className="flex items-start space-x-4">
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                      <Book className="h-6 w-6 text-primary" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-semibold">Developer Documentation</div>
+                      <div className="text-sm text-muted-foreground">
+                        OAuth2.1 integration guides and SDK docs
+                      </div>
+                    </div>
+                  </div>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Main Content Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-2">
@@ -306,7 +379,15 @@ const Admin = () => {
                                 <Badge variant={org.status === 'active' ? "default" : "secondary"}>
                                   {org.status}
                                 </Badge>
+                                <Badge variant="outline" className="text-xs">
+                                  {org.member_count} member{org.member_count !== 1 ? 's' : ''}
+                                </Badge>
                               </div>
+                              {org.owner && (
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  Owner: {org.owner.first_name} {org.owner.last_name} ({org.owner.email})
+                                </div>
+                              )}
                             </div>
                           </div>
                           <div className="text-right text-sm text-muted-foreground">

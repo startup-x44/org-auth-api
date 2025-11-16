@@ -50,6 +50,23 @@ func (h *AdminHandler) ListUsers(c *gin.Context) {
 	})
 }
 
+// ListOrganizations handles listing all organizations for admin
+func (h *AdminHandler) ListOrganizations(c *gin.Context) {
+	organizations, err := h.authService.OrganizationService().ListAllOrganizations(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    organizations,
+	})
+}
+
 // ActivateUser handles user activation
 func (h *AdminHandler) ActivateUser(c *gin.Context) {
 	userID := c.Param("userId")

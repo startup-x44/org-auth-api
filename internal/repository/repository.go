@@ -24,6 +24,10 @@ type repository struct {
 	rolePermRepo      RolePermissionRepository
 	roleRepo          RoleRepository
 	permRepo          PermissionRepository
+	clientAppRepo     ClientAppRepository
+	authCodeRepo      AuthorizationCodeRepository
+	oauthRefreshRepo  OAuthRefreshTokenRepository
+	apiKeyRepo        APIKeyRepository
 }
 
 // NewRepository creates a new repository instance
@@ -41,6 +45,10 @@ func NewRepository(db *gorm.DB) Repository {
 		rolePermRepo:      NewRolePermissionRepository(db),
 		roleRepo:          NewRoleRepository(db),
 		permRepo:          NewPermissionRepository(db),
+		clientAppRepo:     NewClientAppRepository(db),
+		authCodeRepo:      NewAuthorizationCodeRepository(db),
+		oauthRefreshRepo:  NewOAuthRefreshTokenRepository(db),
+		apiKeyRepo:        NewAPIKeyRepository(db),
 	}
 }
 
@@ -97,6 +105,26 @@ func (r *repository) Role() RoleRepository {
 // Permission returns the permission repository
 func (r *repository) Permission() PermissionRepository {
 	return r.permRepo
+}
+
+// ClientApp returns the client app repository
+func (r *repository) ClientApp() ClientAppRepository {
+	return r.clientAppRepo
+}
+
+// AuthorizationCode returns the authorization code repository
+func (r *repository) AuthorizationCode() AuthorizationCodeRepository {
+	return r.authCodeRepo
+}
+
+// OAuthRefreshToken returns the OAuth refresh token repository
+func (r *repository) OAuthRefreshToken() OAuthRefreshTokenRepository {
+	return r.oauthRefreshRepo
+}
+
+// APIKey returns the API key repository
+func (r *repository) APIKey() APIKeyRepository {
+	return r.apiKeyRepo
 }
 
 // CreateDefaultAdminRole creates the default OWNER role for an organization with all permissions
@@ -169,6 +197,10 @@ func (r *repository) BeginTransaction(ctx context.Context) (Transaction, error) 
 		rolePermRepo:      NewRolePermissionRepository(tx),
 		roleRepo:          NewRoleRepository(tx),
 		permRepo:          NewPermissionRepository(tx),
+		clientAppRepo:     NewClientAppRepository(tx),
+		authCodeRepo:      NewAuthorizationCodeRepository(tx),
+		oauthRefreshRepo:  NewOAuthRefreshTokenRepository(tx),
+		apiKeyRepo:        NewAPIKeyRepository(tx),
 	}, nil
 }
 
@@ -186,6 +218,10 @@ type transaction struct {
 	rolePermRepo      RolePermissionRepository
 	roleRepo          RoleRepository
 	permRepo          PermissionRepository
+	clientAppRepo     ClientAppRepository
+	authCodeRepo      AuthorizationCodeRepository
+	oauthRefreshRepo  OAuthRefreshTokenRepository
+	apiKeyRepo        APIKeyRepository
 }
 
 // Commit commits the transaction
@@ -253,6 +289,26 @@ func (t *transaction) Permission() PermissionRepository {
 	return t.permRepo
 }
 
+// ClientApp returns the client app repository for transaction
+func (t *transaction) ClientApp() ClientAppRepository {
+	return t.clientAppRepo
+}
+
+// AuthorizationCode returns the authorization code repository for transaction
+func (t *transaction) AuthorizationCode() AuthorizationCodeRepository {
+	return t.authCodeRepo
+}
+
+// OAuthRefreshToken returns the OAuth refresh token repository for transaction
+func (t *transaction) OAuthRefreshToken() OAuthRefreshTokenRepository {
+	return t.oauthRefreshRepo
+}
+
+// APIKey returns the API key repository for transaction
+func (t *transaction) APIKey() APIKeyRepository {
+	return t.apiKeyRepo
+}
+
 // Migrate runs database migrations
 func Migrate(db *gorm.DB) error {
 	// Auto migrate all models
@@ -265,9 +321,13 @@ func Migrate(db *gorm.DB) error {
 		&models.RefreshToken{},
 		&models.PasswordReset{},
 		&models.FailedLoginAttempt{},
-		&models.Permission{},     // Global system permissions
-		&models.Role{},           // Organization-specific roles
-		&models.RolePermission{}, // Role-Permission many-to-many
+		&models.Permission{},        // Global system permissions
+		&models.Role{},              // Organization-specific roles
+		&models.RolePermission{},    // Role-Permission many-to-many
+		&models.ClientApp{},         // OAuth2 client applications
+		&models.AuthorizationCode{}, // OAuth2 authorization codes
+		&models.OAuthRefreshToken{}, // OAuth2 refresh tokens
+		&models.APIKey{},            // API keys for programmatic access
 	); err != nil {
 		return err
 	}
