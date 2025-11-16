@@ -109,6 +109,36 @@ func (s *DatabaseSeeder) seedPermissions(ctx context.Context) error {
 			Category:    "organization",
 			IsSystem:    true,
 		},
+
+		// Permission CRUD (system permissions)
+		{
+			Name:        "permission:create",
+			DisplayName: "Create Permission",
+			Description: "Create new permissions",
+			Category:    "permission",
+			IsSystem:    true,
+		},
+		{
+			Name:        "permission:update",
+			DisplayName: "Update Permission",
+			Description: "Update existing permissions",
+			Category:    "permission",
+			IsSystem:    true,
+		},
+		{
+			Name:        "permission:delete",
+			DisplayName: "Delete Permission",
+			Description: "Delete permissions",
+			Category:    "permission",
+			IsSystem:    true,
+		},
+		{
+			Name:        "permission:view",
+			DisplayName: "View Permissions",
+			Description: "View all permissions",
+			Category:    "permission",
+			IsSystem:    true,
+		},
 	}
 
 	for _, perm := range permissions {

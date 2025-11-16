@@ -93,6 +93,12 @@ const (
 	PermissionRoleDelete = "role:delete"
 	PermissionRoleView   = "role:view"
 
+	// Permission management permissions
+	PermissionPermissionCreate = "permission:create"
+	PermissionPermissionUpdate = "permission:update"
+	PermissionPermissionDelete = "permission:delete"
+	PermissionPermissionView   = "permission:view"
+
 	// Certificate permissions (for future use)
 	PermissionCertIssue  = "cert:issue"
 	PermissionCertRevoke = "cert:revoke"
@@ -130,6 +136,12 @@ func DefaultPermissions() []Permission {
 		{Name: PermissionRoleDelete, DisplayName: "Delete Roles", Description: "Delete custom roles", Category: "role", IsSystem: true},
 		{Name: PermissionRoleView, DisplayName: "View Roles", Description: "View organization roles", Category: "role", IsSystem: true},
 
+		// Permissions
+		{Name: PermissionPermissionCreate, DisplayName: "Create Permission", Description: "Create new permissions", Category: "permission", IsSystem: true},
+		{Name: PermissionPermissionUpdate, DisplayName: "Update Permission", Description: "Update existing permissions", Category: "permission", IsSystem: true},
+		{Name: PermissionPermissionDelete, DisplayName: "Delete Permission", Description: "Delete permissions", Category: "permission", IsSystem: true},
+		{Name: PermissionPermissionView, DisplayName: "View Permissions", Description: "View all permissions", Category: "permission", IsSystem: true},
+
 		// Certificates
 		{Name: PermissionCertIssue, DisplayName: "Issue Certificates", Description: "Issue new certificates", Category: "certificate", IsSystem: true},
 		{Name: PermissionCertRevoke, DisplayName: "Revoke Certificates", Description: "Revoke issued certificates", Category: "certificate", IsSystem: true},
@@ -159,6 +171,11 @@ func DefaultAdminPermissions() []string {
 		PermissionRoleUpdate,
 		PermissionRoleDelete,
 		PermissionRoleView,
+		// Permissions
+		PermissionPermissionCreate,
+		PermissionPermissionUpdate,
+		PermissionPermissionDelete,
+		PermissionPermissionView,
 		// Certificates
 		PermissionCertIssue,
 		PermissionCertRevoke,
