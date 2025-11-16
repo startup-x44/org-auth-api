@@ -139,6 +139,8 @@ func (r *permissionRepository) GetByNames(ctx context.Context, names []string) (
 }
 
 // SECURE VERSION: multiple permissions, ensures org ownership + system visibility
+// NOTE: This returns ONLY custom permissions (is_system=false) for the organization
+// System permissions are NOT included - custom roles should only have custom permissions
 func (r *permissionRepository) GetByNamesAndOrganization(ctx context.Context, names []string, orgID string) ([]*models.Permission, error) {
 	orgUUID, err := uuid.Parse(orgID)
 	if err != nil {
@@ -146,15 +148,16 @@ func (r *permissionRepository) GetByNamesAndOrganization(ctx context.Context, na
 	}
 
 	var perms []*models.Permission
+	// ONLY get custom permissions (is_system=false) that belong to this organization
 	err = r.db.WithContext(ctx).
-		Where("(organization_id IS NULL OR organization_id = ?) AND name IN ?", orgUUID, names).
+		Where("organization_id = ? AND is_system = ? AND name IN ?", orgUUID, false, names).
 		Find(&perms).Error
 
 	if err != nil {
 		return nil, err
 	}
 
-	// STRICT: Ensure all requested names exist in org/system
+	// STRICT: Ensure all requested names exist as custom permissions in this org
 	if len(perms) != len(names) {
 		return nil, fmt.Errorf("one or more permissions do not exist in this organization")
 	}
