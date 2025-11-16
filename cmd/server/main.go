@@ -62,13 +62,14 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 	adminHandler := handler.NewAdminHandler(authService)
 	organizationHandler := handler.NewOrganizationHandler(authService)
+	roleHandler := handler.NewRoleHandler(authService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 	organizationMiddleware := middleware.NewOrganizationMiddleware(authService)
 
 	// Initialize Gin router
-	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, authMiddleware, organizationMiddleware)
+	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, roleHandler, authMiddleware, organizationMiddleware)
 
 	// Start server
 	srv := &http.Server{
@@ -148,7 +149,7 @@ func runSeeders(db *gorm.DB) error {
 	return seeder.Seed(ctx)
 }
 
-func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware) *gin.Engine {
+func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, roleHandler *handler.RoleHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware) *gin.Engine {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -182,6 +183,8 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			auth.POST("/refresh", authHandler.RefreshToken)
 			auth.POST("/forgot-password", authHandler.ForgotPassword)
 			auth.POST("/reset-password", authHandler.ResetPassword)
+			auth.POST("/verify-email", authHandler.VerifyEmail)
+			auth.POST("/resend-verification", authHandler.ResendVerificationEmail)
 		}
 
 		// Organization selection (requires valid credentials from login)
@@ -212,15 +215,32 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			org.DELETE("/:orgId", organizationMiddleware.OrgAdminRequired(), organizationHandler.DeleteOrganization)
 
 			// Organization members
-			org.GET("/:orgId/members", organizationMiddleware.MembershipRequired(""), organizationHandler.ListOrganizationMembers)
-			org.POST("/:orgId/members", organizationMiddleware.OrgAdminRequired(), organizationHandler.InviteUser)
-			org.PUT("/:orgId/members/:userId", organizationMiddleware.OrgAdminRequired(), organizationHandler.UpdateMembership)
-			org.DELETE("/:orgId/members/:userId", organizationMiddleware.OrgAdminRequired(), organizationHandler.RemoveMember)
+			org.GET("/:orgId/members", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("member:view"), organizationHandler.ListOrganizationMembers)
+			org.POST("/:orgId/members", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("member:invite"), organizationHandler.InviteUser)
+			org.PUT("/:orgId/members/:userId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("member:update"), organizationHandler.UpdateMembership)
+			org.DELETE("/:orgId/members/:userId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("member:update"), organizationHandler.RemoveMember)
+
+			// Organization roles
+			org.GET("/:orgId/roles", organizationMiddleware.MembershipRequired(""), organizationHandler.GetOrganizationRoles)
+			org.POST("/:orgId/roles", organizationMiddleware.OrgAdminRequired(), roleHandler.CreateRole)
+			org.GET("/:orgId/roles/:roleId", organizationMiddleware.MembershipRequired(""), roleHandler.GetRole)
+			org.PUT("/:orgId/roles/:roleId", organizationMiddleware.OrgAdminRequired(), roleHandler.UpdateRole)
+			org.DELETE("/:orgId/roles/:roleId", organizationMiddleware.OrgAdminRequired(), roleHandler.DeleteRole)
+
+			// Role permissions
+			org.POST("/:orgId/roles/:roleId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.AssignPermissions)
+			org.DELETE("/:orgId/roles/:roleId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.RevokePermissions)
+
+			// List all available permissions
+			org.GET("/:orgId/permissions", organizationMiddleware.MembershipRequired(""), roleHandler.ListPermissions)
+			org.POST("/:orgId/permissions", organizationMiddleware.OrgAdminRequired(), roleHandler.CreatePermission)
+			org.PUT("/:orgId/permissions/:permission_id", organizationMiddleware.OrgAdminRequired(), roleHandler.UpdatePermission)
+			org.DELETE("/:orgId/permissions/:permission_id", organizationMiddleware.OrgAdminRequired(), roleHandler.DeletePermission)
 
 			// Organization invitations
-			org.GET("/:orgId/invitations", organizationMiddleware.OrgAdminRequired(), organizationHandler.GetOrganizationInvitations)
-			org.POST("/:orgId/invitations/:invitationId/resend", organizationMiddleware.OrgAdminRequired(), organizationHandler.ResendInvitation)
-			org.DELETE("/:orgId/invitations/:invitationId", organizationMiddleware.OrgAdminRequired(), organizationHandler.CancelInvitation)
+			org.GET("/:orgId/invitations", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("invitation:view"), organizationHandler.GetOrganizationInvitations)
+			org.POST("/:orgId/invitations/:invitationId/resend", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("invitation:resend"), organizationHandler.ResendInvitation)
+			org.DELETE("/:orgId/invitations/:invitationId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("invitation:cancel"), organizationHandler.CancelInvitation)
 		}
 
 		// Invitation acceptance (requires authentication but NOT organization membership)

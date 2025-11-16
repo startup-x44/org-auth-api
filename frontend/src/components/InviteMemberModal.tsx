@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
-import { X, Mail, UserPlus, Shield, Users, Crown } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { X, Mail, UserPlus, Shield, Users, Crown, Briefcase } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import api from '@/lib/axios-instance'
+import { organizationAPI } from '@/lib/api'
 import useAuthStore from '@/store/auth'
 
 interface InviteMemberModalProps {
@@ -13,27 +13,86 @@ interface InviteMemberModalProps {
   onSuccess: () => void
 }
 
+interface Role {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  is_system: boolean
+}
+
 const InviteMemberModal: React.FC<InviteMemberModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const { organization } = useAuthStore()
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState('student')
+  const [role, setRole] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadingRoles, setLoadingRoles] = useState(false)
   const [error, setError] = useState('')
+  const [roles, setRoles] = useState<Role[]>([])
+
+  // Icon mapping for different role types
+  const getRoleIcon = (roleName: string) => {
+    const iconMap: Record<string, any> = {
+      'student': Users,
+      'issuer': Shield,
+      'rto': Crown,
+      'admin': Briefcase,
+    }
+    return iconMap[roleName.toLowerCase()] || Users
+  }
+
+  // Fetch roles when modal opens
+  useEffect(() => {
+    if (isOpen && organization?.organization_id) {
+      fetchRoles()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, organization?.organization_id])
+
+  const fetchRoles = async () => {
+    if (!organization?.organization_id) return
+    
+    setLoadingRoles(true)
+    setError('')
+    try {
+      const response = await organizationAPI.getRoles(organization.organization_id)
+      if (response.success) {
+        // Filter out system roles (admin) - only show non-system roles for inviting
+        const availableRoles = response.data.filter((r: Role) => !r.is_system)
+        setRoles(availableRoles)
+        // Set first role as default if available
+        if (availableRoles.length > 0 && !role) {
+          setRole(availableRoles[0].name)
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch roles:', err)
+      setError('Failed to load roles')
+    } finally {
+      setLoadingRoles(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
+    if (!organization?.organization_id) {
+      setError('Organization not found')
+      setLoading(false)
+      return
+    }
+
     try {
-      const response = await api.post(`/organizations/${organization?.organization_id}/members`, {
+      const response = await organizationAPI.inviteUser(organization.organization_id, {
         email,
-        role
+        role: role || undefined
       })
 
-      if (response.data.success) {
+      if (response.success) {
         setEmail('')
-        setRole('student')
+        setRole(roles.length > 0 ? roles[0].name : '')
         onSuccess()
         onClose()
       }
@@ -43,12 +102,6 @@ const InviteMemberModal: React.FC<InviteMemberModalProps> = ({ isOpen, onClose, 
       setLoading(false)
     }
   }
-
-  const roleOptions = [
-    { value: 'student', label: 'Student', icon: Users, description: 'Can view and access credentials' },
-    { value: 'issuer', label: 'Issuer', icon: Shield, description: 'Can issue and verify credentials' },
-    { value: 'rto', label: 'RTO', icon: Crown, description: 'Registered Training Organization' }
-  ]
 
   return (
     <AnimatePresence>
@@ -125,45 +178,55 @@ const InviteMemberModal: React.FC<InviteMemberModalProps> = ({ isOpen, onClose, 
                   <Label className="text-sm font-medium text-gray-700">
                     Role
                   </Label>
-                  <div className="space-y-2">
-                    {roleOptions.map((option) => {
-                      const Icon = option.icon
-                      return (
-                        <label
-                          key={option.value}
-                          className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                            role === option.value
-                              ? 'border-blue-600 bg-blue-50'
-                              : 'border-gray-200 hover:border-gray-300 bg-white'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="role"
-                            value={option.value}
-                            checked={role === option.value}
-                            onChange={(e) => setRole(e.target.value)}
-                            className="w-4 h-4 text-blue-600"
-                          />
-                          <div className={`p-2 rounded-lg ${
-                            role === option.value ? 'bg-blue-100' : 'bg-gray-100'
-                          }`}>
-                            <Icon className={`h-5 w-5 ${
-                              role === option.value ? 'text-blue-600' : 'text-gray-600'
-                            }`} />
-                          </div>
-                          <div className="flex-1">
-                            <p className={`font-medium ${
-                              role === option.value ? 'text-blue-900' : 'text-gray-900'
+                  {loadingRoles ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent" />
+                    </div>
+                  ) : roles.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      No roles available
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {roles.map((roleOption) => {
+                        const Icon = getRoleIcon(roleOption.name)
+                        return (
+                          <label
+                            key={roleOption.id}
+                            className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                              role === roleOption.name
+                                ? 'border-blue-600 bg-blue-50'
+                                : 'border-gray-200 hover:border-gray-300 bg-white'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="role"
+                              value={roleOption.name}
+                              checked={role === roleOption.name}
+                              onChange={(e) => setRole(e.target.value)}
+                              className="w-4 h-4 text-blue-600"
+                            />
+                            <div className={`p-2 rounded-lg ${
+                              role === roleOption.name ? 'bg-blue-100' : 'bg-gray-100'
                             }`}>
-                              {option.label}
-                            </p>
-                            <p className="text-sm text-gray-500">{option.description}</p>
-                          </div>
-                        </label>
-                      )
-                    })}
-                  </div>
+                              <Icon className={`h-5 w-5 ${
+                                role === roleOption.name ? 'text-blue-600' : 'text-gray-600'
+                              }`} />
+                            </div>
+                            <div className="flex-1">
+                              <p className={`font-medium ${
+                                role === roleOption.name ? 'text-blue-900' : 'text-gray-900'
+                              }`}>
+                                {roleOption.display_name}
+                              </p>
+                              <p className="text-sm text-gray-500">{roleOption.description}</p>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Actions */}
@@ -180,7 +243,7 @@ const InviteMemberModal: React.FC<InviteMemberModalProps> = ({ isOpen, onClose, 
                   <Button
                     type="submit"
                     className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
-                    disabled={loading}
+                    disabled={loading || !role || loadingRoles}
                   >
                     {loading ? (
                       <>

@@ -47,6 +47,11 @@ type UserService interface {
 	ForgotPassword(ctx context.Context, req *ForgotPasswordRequest) error
 	ResetPassword(ctx context.Context, req *ResetPasswordRequest) error
 
+	// EMAIL VERIFICATION
+	SendVerificationEmail(ctx context.Context, userID string) error
+	VerifyEmail(ctx context.Context, email, code string) error
+	ResendVerificationEmail(ctx context.Context, email string) error
+
 	// ADMIN
 	ListUsers(ctx context.Context, limit int, cursor string) (*UserListResponse, error)
 	ActivateUser(ctx context.Context, userID string) error
@@ -227,6 +232,13 @@ const (
 	FailedAttemptWindow = 15 * time.Minute
 )
 
+// Email verification rate limiting constants
+const (
+	MaxVerificationAttempts     = 5                // Max attempts per time window
+	VerificationAttemptWindow   = 5 * time.Minute  // Time window for attempts
+	VerificationLockoutDuration = 15 * time.Minute // Lockout duration after max attempts
+)
+
 // ───────────────────────────────────────────────────────────────────────────────
 // SERVICE IMPLEMENTATION
 // ───────────────────────────────────────────────────────────────────────────────
@@ -359,12 +371,10 @@ func (s *userService) RegisterGlobal(ctx context.Context, req *RegisterGlobalReq
 					role, err := s.repo.Role().GetByID(ctx, invitation.RoleID.String())
 					if err != nil || role == nil {
 						fmt.Printf("ERROR: Role not found: %v\n", err)
-					} else if role.OrganizationID != invitation.OrganizationID {
-						fmt.Printf("ERROR: Role organization mismatch - role.org=%s, invitation.org=%s\n", role.OrganizationID, invitation.OrganizationID)
+					} else if role.OrganizationID == nil || *role.OrganizationID != invitation.OrganizationID {
+						fmt.Printf("ERROR: Role organization mismatch - role.org=%v, invitation.org=%s\n", role.OrganizationID, invitation.OrganizationID)
 					} else {
-						fmt.Printf("Creating membership for user=%s in org=%s with roleID=%s\n", user.ID, invitation.OrganizationID, invitation.RoleID)
-
-						// Create organization membership
+						fmt.Printf("Creating membership for user=%s in org=%s with roleID=%s\n", user.ID, invitation.OrganizationID, invitation.RoleID) // Create organization membership
 						now := time.Now()
 						membership := &models.OrganizationMembership{
 							OrganizationID: invitation.OrganizationID,
@@ -397,6 +407,12 @@ func (s *userService) RegisterGlobal(ctx context.Context, req *RegisterGlobalReq
 		fmt.Printf("=== END AUTO-ACCEPT ===\n")
 	}
 
+	// Send verification email with 6-digit code
+	if err := s.SendVerificationEmail(ctx, user.ID.String()); err != nil {
+		// Log error but don't fail registration - user can resend later
+		fmt.Printf("WARNING: Failed to send verification email to %s: %v\n", user.Email, err)
+	}
+
 	return &RegisterGlobalResponse{
 		User: s.convertToUserProfile(user),
 	}, nil
@@ -423,6 +439,11 @@ func (s *userService) LoginGlobal(ctx context.Context, req *LoginGlobalRequest) 
 
 	if user.Status != models.UserStatusActive {
 		return nil, errors.New("account is deactivated")
+	}
+
+	// Check if email is verified
+	if user.EmailVerifiedAt == nil {
+		return nil, errors.New("email not verified. Please check your email for the verification code")
 	}
 
 	valid, err := s.passwordService.Verify(req.Password, user.PasswordHash)
@@ -1003,6 +1024,148 @@ func (s *userService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// EMAIL VERIFICATION
+// ───────────────────────────────────────────────────────────────────────────────
+
+func (s *userService) SendVerificationEmail(ctx context.Context, userID string) error {
+	user, err := s.repo.User().GetByID(ctx, userID)
+	if err != nil || user == nil {
+		return errors.New("user not found")
+	}
+
+	// Already verified
+	if user.EmailVerifiedAt != nil {
+		return errors.New("email already verified")
+	}
+
+	// Generate 6-digit verification code
+	code := generateVerificationCode()
+
+	// Store code (plain text is OK for short-lived codes)
+	expiresAt := time.Now().Add(15 * time.Minute) // 15 minutes expiry
+	user.EmailVerificationToken = &code
+	user.EmailVerificationExpiresAt = &expiresAt
+
+	if err := s.repo.User().Update(ctx, user); err != nil {
+		return fmt.Errorf("failed to store verification code: %w", err)
+	}
+
+	// Send verification email
+	if s.emailSvc != nil {
+		if err := s.emailSvc.SendVerificationEmail(user.Email, code); err != nil {
+			fmt.Printf("Failed to send verification email: %v\n", err)
+			return fmt.Errorf("failed to send verification email: %w", err)
+		}
+	} else {
+		// Dev mode: print to console
+		fmt.Printf("📧 Verification code for %s: %s\n", user.Email, code)
+		fmt.Printf("🔗 Code expires at: %s\n", expiresAt.Format(time.RFC3339))
+	}
+
+	return nil
+}
+
+func (s *userService) VerifyEmail(ctx context.Context, email, code string) error {
+	if code == "" {
+		return errors.New("verification code is required")
+	}
+
+	// Normalize email
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	// Check rate limiting FIRST (before any DB queries to prevent enumeration)
+	if s.isVerificationRateLimited(ctx, email) {
+		return errors.New("too many verification attempts - please wait 15 minutes before trying again")
+	}
+
+	// Find user by email
+	user, err := s.repo.User().GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		// Record failed attempt even for non-existent users to prevent enumeration
+		s.recordVerificationAttempt(ctx, email)
+		return errors.New("invalid verification code")
+	}
+
+	// Check if already verified
+	if user.EmailVerifiedAt != nil {
+		return errors.New("email already verified")
+	}
+
+	// Check if code exists
+	if user.EmailVerificationToken == nil {
+		s.recordVerificationAttempt(ctx, email)
+		return errors.New("no verification code found - please request a new code")
+	}
+
+	// Check if token expired
+	if user.EmailVerificationExpiresAt == nil || time.Now().After(*user.EmailVerificationExpiresAt) {
+		s.recordVerificationAttempt(ctx, email)
+		return errors.New("verification code expired - please request a new code")
+	}
+
+	// Verify code matches
+	if *user.EmailVerificationToken != code {
+		s.recordVerificationAttempt(ctx, email)
+		return errors.New("invalid verification code")
+	}
+
+	// SUCCESS: Mark email as verified
+	now := time.Now()
+	user.EmailVerifiedAt = &now
+	user.EmailVerificationToken = nil
+	user.EmailVerificationExpiresAt = nil
+
+	if err := s.repo.User().Update(ctx, user); err != nil {
+		return fmt.Errorf("failed to verify email: %w", err)
+	}
+
+	// Clear verification attempts on success
+	s.clearVerificationAttempts(ctx, email)
+
+	fmt.Printf("✅ Email verified for user: %s\n", user.Email)
+	return nil
+}
+
+func (s *userService) ResendVerificationEmail(ctx context.Context, email string) error {
+	if email == "" {
+		return errors.New("email is required")
+	}
+
+	// Normalize email
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	user, err := s.repo.User().GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		// Don't reveal if user exists
+		return nil
+	}
+
+	// Already verified
+	if user.EmailVerifiedAt != nil {
+		return errors.New("email already verified")
+	}
+
+	// Rate limiting: check if code was sent recently (within last 60 seconds)
+	if user.EmailVerificationExpiresAt != nil {
+		timeRemaining := time.Until(user.EmailVerificationExpiresAt.Add(-14 * time.Minute)) // 15min - 14min = 1min since sent
+		if timeRemaining > 0 {
+			return fmt.Errorf("please wait %d seconds before requesting a new code", int(timeRemaining.Seconds()))
+		}
+	}
+
+	// Send new verification email
+	return s.SendVerificationEmail(ctx, user.ID.String())
+}
+
+// generateVerificationCode generates a random 6-digit code
+func generateVerificationCode() string {
+	b := make([]byte, 3) // 3 bytes = 6 hex digits
+	rand.Read(b)
+	code := fmt.Sprintf("%06d", (int(b[0])<<16|int(b[1])<<8|int(b[2]))%1000000)
+	return code
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // ADMIN (GLOBAL SUPERADMIN ONLY)
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -1184,14 +1347,16 @@ func (s *userService) createSession(ctx context.Context, user *models.User, orga
 
 // issueTokenPair generates org- & session-bound JWTs and returns refresh token ID
 func (s *userService) issueTokenPair(ctx context.Context, user *models.User, organizationID uuid.UUID, roleID uuid.UUID, sessionID uuid.UUID) (*TokenPair, string, error) {
-	// Load role to get name
+	// Load role to get name and organization context
 	role, err := s.repo.Role().GetByID(ctx, roleID.String())
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to load role: %w", err)
 	}
 
-	// Get user permissions for this role (with caching)
-	permissions, err := s.getRolePermissionsWithCache(ctx, role)
+	// Get user permissions for this role (filtered by user type)
+	// Superadmin: gets system + org permissions
+	// Org admin/user: gets ONLY org permissions (custom roles)
+	permissions, err := s.getRolePermissionsFiltered(ctx, user, role, organizationID)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to load permissions: %w", err)
 	}
@@ -1230,7 +1395,56 @@ func (s *userService) issueTokenPair(ctx context.Context, user *models.User, org
 	return tokenPair, refreshID, nil
 }
 
-// getRolePermissionsWithCache fetches permissions with Redis caching
+// getRolePermissionsFiltered fetches permissions filtered by user type
+// Superadmin: system permissions + organization permissions
+// Regular user: ONLY organization custom permissions (no system permissions)
+func (s *userService) getRolePermissionsFiltered(ctx context.Context, user *models.User, role *models.Role, orgID uuid.UUID) ([]string, error) {
+	// CRITICAL: System roles should NOT be assigned to organizations
+	// If somehow a system role is found, handle it carefully
+	if role.IsSystem && role.OrganizationID == nil {
+		// System role detected - only superadmin should have these
+		if user.IsSuperadmin {
+			// Superadmin with system role: return all permissions
+			return models.DefaultAdminPermissions(), nil
+		} else {
+			// ERROR: Non-superadmin should never have a system role
+			return nil, errors.New("invalid role assignment: system role assigned to non-superadmin")
+		}
+	}
+
+	// For custom organization roles (IsSystem=false, OrganizationID != nil)
+	// Fetch permissions from DB (filtered by organization context)
+	perms, err := s.repo.Permission().GetRolePermissions(ctx, role.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	permissions := make([]string, 0, len(perms))
+	for _, p := range perms {
+		// Filter permissions based on user type and organization context
+		if user.IsSuperadmin {
+			// Superadmin sees ALL permissions (system + org-specific)
+			permissions = append(permissions, p.Name)
+		} else {
+			// Regular users: ONLY include permissions that are:
+			// - System permissions (IsSystem=true, OrganizationID=nil), OR
+			// - Custom permissions for THIS organization (OrganizationID = orgID)
+			if p.IsSystem && p.OrganizationID == nil {
+				// Include system permission
+				permissions = append(permissions, p.Name)
+			} else if p.OrganizationID != nil && *p.OrganizationID == orgID {
+				// Include org-specific permission
+				permissions = append(permissions, p.Name)
+			}
+			// Skip permissions from other organizations
+		}
+	}
+
+	return permissions, nil
+}
+
+// DEPRECATED: getRolePermissionsWithCache - replaced with getRolePermissionsFiltered
+// This method did not properly filter permissions by user type
 func (s *userService) getRolePermissionsWithCache(ctx context.Context, role *models.Role) ([]string, error) {
 	// Admin gets all permissions
 	if role.Name == models.RoleNameAdmin && role.IsSystem {
@@ -1428,6 +1642,80 @@ func (s *userService) clearFailedAttempts(ctx context.Context, email, ipAddress 
 		lockKey := fmt.Sprintf("lockout:%s", email)
 		_ = s.redisClient.Del(ctx, lockKey)
 	}
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// EMAIL VERIFICATION RATE LIMITING (Redis-based)
+// ───────────────────────────────────────────────────────────────────────────────
+
+// isVerificationRateLimited checks if email has exceeded verification attempts
+func (s *userService) isVerificationRateLimited(ctx context.Context, email string) bool {
+	if s.redisClient == nil {
+		return false // No rate limiting if Redis unavailable
+	}
+
+	lockKey := fmt.Sprintf("verify_lockout:%s", email)
+
+	// Check if account is locked out
+	exists, err := s.redisClient.Exists(ctx, lockKey).Result()
+	if err == nil && exists > 0 {
+		return true
+	}
+
+	// Check attempt count in current window
+	attemptKey := fmt.Sprintf("verify_attempts:%s", email)
+	count, err := s.redisClient.Get(ctx, attemptKey).Int()
+	if err == nil && count >= MaxVerificationAttempts {
+		// Lock out the account
+		_ = s.redisClient.Set(ctx, lockKey, "locked", VerificationLockoutDuration).Err()
+		return true
+	}
+
+	return false
+}
+
+// recordVerificationAttempt increments the verification attempt counter
+func (s *userService) recordVerificationAttempt(ctx context.Context, email string) {
+	if s.redisClient == nil {
+		return
+	}
+
+	attemptKey := fmt.Sprintf("verify_attempts:%s", email)
+
+	// Increment counter
+	count, err := s.redisClient.Incr(ctx, attemptKey).Result()
+	if err != nil {
+		fmt.Printf("Failed to record verification attempt: %v\n", err)
+		return
+	}
+
+	// Set expiry on first attempt
+	if count == 1 {
+		_ = s.redisClient.Expire(ctx, attemptKey, VerificationAttemptWindow).Err()
+	}
+
+	// Log attempts for monitoring
+	fmt.Printf("🔐 Verification attempt %d/%d for email: %s\n", count, MaxVerificationAttempts, email)
+
+	// If max attempts reached, lock account
+	if count >= MaxVerificationAttempts {
+		lockKey := fmt.Sprintf("verify_lockout:%s", email)
+		_ = s.redisClient.Set(ctx, lockKey, "locked", VerificationLockoutDuration).Err()
+		fmt.Printf("⚠️  Email verification locked for %s (too many attempts)\n", email)
+	}
+}
+
+// clearVerificationAttempts clears attempt counter on successful verification
+func (s *userService) clearVerificationAttempts(ctx context.Context, email string) {
+	if s.redisClient == nil {
+		return
+	}
+
+	attemptKey := fmt.Sprintf("verify_attempts:%s", email)
+	lockKey := fmt.Sprintf("verify_lockout:%s", email)
+
+	_ = s.redisClient.Del(ctx, attemptKey)
+	_ = s.redisClient.Del(ctx, lockKey)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

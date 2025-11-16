@@ -16,6 +16,7 @@ type AuthService interface {
 	OrganizationService() OrganizationService
 	SessionService() SessionService
 	BackgroundJobService() BackgroundJobService
+	RoleService() RoleService
 	ValidateToken(ctx context.Context, token string) (*TokenClaims, error)
 	HealthCheck(ctx context.Context) (*HealthCheckResponse, error)
 }
@@ -47,6 +48,7 @@ type authService struct {
 	organizationService OrganizationService
 	sessionSvc          SessionService
 	jobSvc              BackgroundJobService
+	roleSvc             RoleService
 	jwtService          *jwt.Service
 	emailService        email.Service
 	repo                repository.Repository
@@ -80,11 +82,15 @@ func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwor
 	userSvc := NewUserService(repo, jwtService, passwordService)
 	userSvc.SetSessionService(sessionSvc)
 
+	// Initialize role service with a nil audit logger for now
+	roleSvc := NewRoleService(repo, nil)
+
 	return &authService{
 		userService:         userSvc,
 		organizationService: NewOrganizationService(repo, emailService),
 		sessionSvc:          sessionSvc,
 		jobSvc:              jobSvc,
+		roleSvc:             roleSvc,
 		jwtService:          jwtService,
 		emailService:        emailService,
 		repo:                repo,
@@ -95,6 +101,7 @@ func (s *authService) UserService() UserService                   { return s.use
 func (s *authService) OrganizationService() OrganizationService   { return s.organizationService }
 func (s *authService) SessionService() SessionService             { return s.sessionSvc }
 func (s *authService) BackgroundJobService() BackgroundJobService { return s.jobSvc }
+func (s *authService) RoleService() RoleService                   { return s.roleSvc }
 
 // ValidateToken validates JWT token and returns safe claims
 func (s *authService) ValidateToken(ctx context.Context, token string) (*TokenClaims, error) {

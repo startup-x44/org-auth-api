@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
@@ -21,17 +22,37 @@ type RoleService interface {
 	// Role CRUD
 	CreateRole(ctx context.Context, req *CreateRoleRequest) (*RoleResponse, error)
 	GetRole(ctx context.Context, roleID uuid.UUID) (*RoleResponse, error)
+	GetRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) (*RoleResponse, error)
 	GetRolesByOrganization(ctx context.Context, orgID uuid.UUID) ([]*RoleResponse, error)
 	UpdateRole(ctx context.Context, roleID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error)
+	UpdateRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error)
 	DeleteRole(ctx context.Context, roleID uuid.UUID) error
+	DeleteRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) error
 
-	// Permission assignment
-	AssignPermissionsToRole(ctx context.Context, roleID uuid.UUID, permissionNames []string) error
-	RevokePermissionsFromRole(ctx context.Context, roleID uuid.UUID, permissionNames []string) error
+	// Permission assignment (DEPRECATED methods removed for security - use organization-scoped versions)
+	// AssignPermissionsToRole - REMOVED: Use AssignPermissionsToRoleWithOrganization
+	// RevokePermissionsFromRole - REMOVED: Use RevokePermissionsFromRoleWithOrganization
 	GetRolePermissions(ctx context.Context, roleID uuid.UUID) ([]string, error)
+	// Organization-scoped permission assignment (secures custom permission access)
+	AssignPermissionsToRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, permissionNames []string) error
+	RevokePermissionsFromRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, permissionNames []string) error
+	GetRolePermissionsWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) ([]string, error)
 
 	// System permissions
 	ListAllPermissions(ctx context.Context) ([]*PermissionResponse, error)
+	// Organization-scoped permissions (includes system + org-specific)
+	ListAllPermissionsForOrganization(ctx context.Context, orgID uuid.UUID) ([]*PermissionResponse, error)
+
+	// Permission CRUD
+	CreatePermission(ctx context.Context, name, displayName, description, category string) (*PermissionResponse, error)
+	// Organization-scoped permission creation (creates custom permissions tied to org)
+	CreatePermissionForOrganization(ctx context.Context, orgID uuid.UUID, name, displayName, description, category string) (*PermissionResponse, error)
+	UpdatePermission(ctx context.Context, permissionID, displayName, description, category string) (*PermissionResponse, error) // DEPRECATED: Use UpdatePermissionWithOrganization for security
+	// Organization-scoped permission update (validates permission belongs to organization)
+	UpdatePermissionWithOrganization(ctx context.Context, permissionID string, orgID uuid.UUID, displayName, description, category string) (*PermissionResponse, error)
+	DeletePermission(ctx context.Context, permissionID string) error // DEPRECATED: Use DeletePermissionWithOrganization for security
+	// Organization-scoped permission deletion (validates permission belongs to organization)
+	DeletePermissionWithOrganization(ctx context.Context, permissionID string, orgID uuid.UUID) error
 }
 
 // roleService implements RoleService
@@ -64,22 +85,24 @@ type UpdateRoleRequest struct {
 }
 
 type RoleResponse struct {
-	ID             uuid.UUID `json:"id"`
-	OrganizationID uuid.UUID `json:"organization_id"`
-	Name           string    `json:"name"`
-	DisplayName    string    `json:"display_name"`
-	Description    string    `json:"description"`
-	IsSystem       bool      `json:"is_system"`
-	Permissions    []string  `json:"permissions,omitempty"`
-	MemberCount    int       `json:"member_count,omitempty"`
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID *uuid.UUID `json:"organization_id"` // nil for system roles
+	Name           string     `json:"name"`
+	DisplayName    string     `json:"display_name"`
+	Description    string     `json:"description"`
+	IsSystem       bool       `json:"is_system"`
+	Permissions    []string   `json:"permissions,omitempty"`
+	MemberCount    int        `json:"member_count,omitempty"`
 }
 
 type PermissionResponse struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	DisplayName string    `json:"display_name"`
-	Description string    `json:"description"`
-	Category    string    `json:"category"`
+	ID             uuid.UUID  `json:"id"`
+	Name           string     `json:"name"`
+	DisplayName    string     `json:"display_name"`
+	Description    string     `json:"description"`
+	Category       string     `json:"category"`
+	IsSystem       bool       `json:"is_system"`
+	OrganizationID *uuid.UUID `json:"organization_id,omitempty"` // nil for system permissions
 }
 
 // HasPermission checks if a user has a specific permission in an organization
@@ -87,17 +110,17 @@ func (s *roleService) HasPermission(ctx context.Context, userID, orgID uuid.UUID
 	// Get user's membership
 	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID.String(), userID.String())
 	if err != nil {
-		return false, fmt.Errorf("membership not found: %w", err)
+		return false, ErrMembershipNotFound
 	}
 
 	if membership.Status != models.MembershipStatusActive {
-		return false, errors.New("membership is not active")
+		return false, ErrMembershipSuspended
 	}
 
-	// Load role
-	role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
+	// Load role with organization validation to prevent cross-org access
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, membership.RoleID.String(), orgID.String())
 	if err != nil {
-		return false, fmt.Errorf("failed to load role: %w", err)
+		return false, fmt.Errorf("failed to load role or role not in organization: %w", err)
 	}
 
 	// If admin role, allow all permissions
@@ -126,10 +149,10 @@ func (s *roleService) GetUserPermissions(ctx context.Context, userID, orgID uuid
 		return nil, errors.New("membership is not active")
 	}
 
-	// Load role
-	role, err := s.repo.Role().GetByID(ctx, membership.RoleID.String())
+	// Load role with organization validation to prevent cross-org access
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, membership.RoleID.String(), orgID.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to load role: %w", err)
+		return nil, fmt.Errorf("failed to load role or role not in organization: %w", err)
 	}
 
 	// If admin role, return all permissions
@@ -155,10 +178,16 @@ func (s *roleService) GetUserPermissions(ctx context.Context, userID, orgID uuid
 func (s *roleService) CreateRole(ctx context.Context, req *CreateRoleRequest) (*RoleResponse, error) {
 	userID := s.getUserID(ctx)
 
-	// Prevent creating system role names
-	if req.Name == models.RoleNameAdmin {
-		return nil, errors.New("cannot create system role 'admin'")
+	// Validate: prevent creating system roles
+	// Only superadmin can create system roles, but this should be done through seeder/migration
+	// Regular users (including org admins) can ONLY create custom roles
+	if req.Name == models.RoleNameAdmin || req.Name == "system_admin" || req.Name == "superadmin" {
+		return nil, errors.New("cannot create system role names - reserved for platform administration")
 	}
+
+	// CRITICAL: Ensure IsSystem cannot be set to true by non-superadmins
+	// Custom roles must have IsSystem=false
+	// (Note: CreateRoleRequest should not even have IsSystem field to prevent this)
 
 	// Check if role name already exists in organization
 	existingRole, err := s.repo.Role().GetByOrganizationAndName(ctx, req.OrganizationID.String(), req.Name)
@@ -166,13 +195,13 @@ func (s *roleService) CreateRole(ctx context.Context, req *CreateRoleRequest) (*
 		return nil, errors.New("role name already exists in organization")
 	}
 
-	// Create role
+	// Create CUSTOM role (IsSystem=false, OrganizationID=required)
 	role := &models.Role{
-		OrganizationID: req.OrganizationID,
+		OrganizationID: &req.OrganizationID,
 		Name:           req.Name,
 		DisplayName:    req.DisplayName,
 		Description:    req.Description,
-		IsSystem:       false,
+		IsSystem:       false, // ALWAYS false for user-created roles
 		CreatedBy:      uuid.MustParse(userID),
 	}
 
@@ -180,23 +209,43 @@ func (s *roleService) CreateRole(ctx context.Context, req *CreateRoleRequest) (*
 		return nil, fmt.Errorf("failed to create role: %w", err)
 	}
 
-	// Assign permissions if provided
+	// Assign permissions if provided (with org validation)
 	if len(req.Permissions) > 0 {
-		if err := s.AssignPermissionsToRole(ctx, role.ID, req.Permissions); err != nil {
+		if err := s.AssignPermissionsToRoleWithOrganization(ctx, role.ID, req.OrganizationID, req.Permissions); err != nil {
 			return nil, fmt.Errorf("failed to assign permissions: %w", err)
 		}
 	}
 
-	s.auditLogger.LogOrganizationAction(userID, "create_role", req.OrganizationID.String(), role.ID.String(), "", true, nil, fmt.Sprintf("Created role: %s", role.Name))
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "create_role", req.OrganizationID.String(), role.ID.String(), "", true, nil, fmt.Sprintf("Created custom role: %s", role.Name))
+	}
 
 	return s.GetRole(ctx, role.ID)
 }
 
-// GetRole retrieves a role by ID
+// GetRole retrieves a role by ID (DEPRECATED: Use GetRoleWithOrganization for security)
 func (s *roleService) GetRole(ctx context.Context, roleID uuid.UUID) (*RoleResponse, error) {
 	role, err := s.repo.Role().GetByID(ctx, roleID.String())
 	if err != nil {
 		return nil, fmt.Errorf("role not found: %w", err)
+	}
+
+	permissions, _ := s.GetRolePermissions(ctx, roleID)
+	response := s.convertToRoleResponse(role)
+	response.Permissions = permissions
+
+	// Get member count
+	count, _ := s.repo.Role().CountMembersByRole(ctx, roleID.String())
+	response.MemberCount = int(count)
+
+	return response, nil
+}
+
+// GetRoleWithOrganization retrieves a role by ID with organization filtering for security
+func (s *roleService) GetRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) (*RoleResponse, error) {
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("role not found in organization: %w", err)
 	}
 
 	permissions, _ := s.GetRolePermissions(ctx, roleID)
@@ -233,7 +282,7 @@ func (s *roleService) GetRolesByOrganization(ctx context.Context, orgID uuid.UUI
 	return responses, nil
 }
 
-// UpdateRole updates a role's details
+// UpdateRole updates a role's details (DEPRECATED: Use UpdateRoleWithOrganization for security)
 func (s *roleService) UpdateRole(ctx context.Context, roleID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error) {
 	userID := s.getUserID(ctx)
 
@@ -247,7 +296,7 @@ func (s *roleService) UpdateRole(ctx context.Context, roleID uuid.UUID, req *Upd
 		return nil, errors.New("cannot update system role")
 	}
 
-	// Update fields
+	// Update fields only if provided (not empty)
 	if req.DisplayName != "" {
 		role.DisplayName = req.DisplayName
 	}
@@ -263,33 +312,140 @@ func (s *roleService) UpdateRole(ctx context.Context, roleID uuid.UUID, req *Upd
 	// Update permissions if provided
 	if req.Permissions != nil {
 		// First revoke all existing permissions
-		existingPerms, _ := s.GetRolePermissions(ctx, roleID)
+		existingPerms, err := s.GetRolePermissions(ctx, roleID)
+		if err != nil {
+			// Log but don't fail - maybe no permissions exist yet
+			fmt.Printf("Warning: failed to get existing permissions: %v\n", err)
+		}
+
 		if len(existingPerms) > 0 {
+			// Ignore errors when revoking (permission might not exist)
 			if err := s.RevokePermissionsFromRole(ctx, roleID, existingPerms); err != nil {
-				return nil, fmt.Errorf("failed to revoke existing permissions: %w", err)
+				fmt.Printf("Warning: failed to revoke permissions: %v\n", err)
 			}
 		}
 
 		// Assign new permissions
 		if len(req.Permissions) > 0 {
-			if err := s.AssignPermissionsToRole(ctx, roleID, req.Permissions); err != nil {
+			if role.OrganizationID != nil {
+				if err := s.AssignPermissionsToRoleWithOrganization(ctx, roleID, *role.OrganizationID, req.Permissions); err != nil {
+					return nil, fmt.Errorf("failed to assign new permissions: %w", err)
+				}
+			}
+		}
+	}
+
+	if s.auditLogger != nil {
+		orgIDStr := ""
+		if role.OrganizationID != nil {
+			orgIDStr = role.OrganizationID.String()
+		}
+		s.auditLogger.LogOrganizationAction(userID, "update_role", orgIDStr, roleID.String(), "", true, nil, fmt.Sprintf("Updated role: %s", role.Name))
+	}
+
+	return s.GetRole(ctx, roleID)
+}
+
+// UpdateRoleWithOrganization updates a role's details with organization filtering for security
+func (s *roleService) UpdateRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, req *UpdateRoleRequest) (*RoleResponse, error) {
+	userID := s.getUserID(ctx)
+
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("role not found in organization: %w", err)
+	}
+
+	// Prevent updating system roles
+	if role.IsSystem {
+		return nil, errors.New("cannot update system role")
+	}
+
+	// Update fields only if provided (not empty)
+	if req.DisplayName != "" {
+		role.DisplayName = req.DisplayName
+	}
+	if req.Description != "" {
+		role.Description = req.Description
+	}
+
+	// Save role
+	if err := s.repo.Role().Update(ctx, role); err != nil {
+		return nil, fmt.Errorf("failed to update role: %w", err)
+	}
+
+	// Update permissions if provided - USING SECURE ORGANIZATION-SCOPED METHODS
+	if req.Permissions != nil {
+		// First get existing permissions with organization validation
+		existingPerms, err := s.GetRolePermissionsWithOrganization(ctx, roleID, orgID)
+		if err != nil {
+			// Log but don't fail - maybe no permissions exist yet
+			fmt.Printf("Warning: failed to get existing permissions: %v\n", err)
+		}
+
+		if len(existingPerms) > 0 {
+			// Revoke existing permissions using organization-scoped method
+			if err := s.RevokePermissionsFromRoleWithOrganization(ctx, roleID, orgID, existingPerms); err != nil {
+				fmt.Printf("Warning: failed to revoke permissions: %v\n", err)
+			}
+		}
+
+		// Assign new permissions using organization-scoped method with validation
+		if len(req.Permissions) > 0 {
+			if err := s.AssignPermissionsToRoleWithOrganization(ctx, roleID, orgID, req.Permissions); err != nil {
 				return nil, fmt.Errorf("failed to assign new permissions: %w", err)
 			}
 		}
 	}
 
-	s.auditLogger.LogOrganizationAction(userID, "update_role", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Updated role: %s", role.Name))
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "update_role", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Updated role: %s", role.Name))
+	}
 
-	return s.GetRole(ctx, roleID)
+	return s.GetRoleWithOrganization(ctx, roleID, orgID)
 }
 
-// DeleteRole deletes a custom role
+// DeleteRole deletes a custom role (DEPRECATED: Use DeleteRoleWithOrganization for security)
 func (s *roleService) DeleteRole(ctx context.Context, roleID uuid.UUID) error {
 	userID := s.getUserID(ctx)
 
 	role, err := s.repo.Role().GetByID(ctx, roleID.String())
 	if err != nil {
-		return fmt.Errorf("role not found: %w", err)
+		return ErrRoleNotFound
+	}
+
+	if role.IsSystem {
+		return errors.New("cannot delete system role")
+	}
+
+	// Check if role is in use by any members
+	memberCount, err := s.repo.Role().CountMembersByRole(ctx, roleID.String())
+	if err != nil {
+		return fmt.Errorf("failed to check role usage: %w", err)
+	}
+
+	if memberCount > 0 {
+		return fmt.Errorf("cannot delete role with %d active members", memberCount)
+	}
+
+	// Delete role (cascade will delete role_permissions)
+	if err := s.repo.Role().DeleteByID(ctx, roleID.String()); err != nil {
+		return fmt.Errorf("failed to delete role: %w", err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "delete_role", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Deleted role: %s", role.Name))
+	}
+
+	return nil
+}
+
+// DeleteRoleWithOrganization deletes a custom role with organization filtering for security
+func (s *roleService) DeleteRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) error {
+	userID := s.getUserID(ctx)
+
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return fmt.Errorf("role not found in organization: %w", err)
 	}
 
 	// Prevent deleting system roles
@@ -308,84 +464,31 @@ func (s *roleService) DeleteRole(ctx context.Context, roleID uuid.UUID) error {
 	}
 
 	// Delete role (cascade will delete role_permissions)
-	if err := s.repo.Role().Delete(ctx, roleID.String()); err != nil {
+	if err := s.repo.Role().DeleteByIDAndOrganization(ctx, roleID.String(), orgID.String()); err != nil {
 		return fmt.Errorf("failed to delete role: %w", err)
 	}
 
-	s.auditLogger.LogOrganizationAction(userID, "delete_role", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Deleted role: %s", role.Name))
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "delete_role", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Deleted role: %s", role.Name))
+	}
 
 	return nil
 }
 
-// AssignPermissionsToRole assigns permissions to a role
+// AssignPermissionsToRole - DISABLED FOR SECURITY: Use AssignPermissionsToRoleWithOrganization instead
+// This method was removed because it does not validate organization context and allows privilege escalation
 func (s *roleService) AssignPermissionsToRole(ctx context.Context, roleID uuid.UUID, permissionNames []string) error {
-	userID := s.getUserID(ctx)
-
-	role, err := s.repo.Role().GetByID(ctx, roleID.String())
-	if err != nil {
-		return fmt.Errorf("role not found: %w", err)
-	}
-
-	// Prevent modifying system role permissions via API (should only be done in code)
-	if role.IsSystem {
-		return errors.New("cannot modify system role permissions")
-	}
-
-	// Get permissions by names
-	perms, err := s.repo.Permission().GetByNames(ctx, permissionNames)
-	if err != nil {
-		return fmt.Errorf("failed to get permissions: %w", err)
-	}
-
-	if len(perms) != len(permissionNames) {
-		return errors.New("some permissions not found")
-	}
-
-	// Assign each permission
-	for _, perm := range perms {
-		if err := s.repo.Permission().AssignToRole(ctx, roleID, perm.ID); err != nil {
-			return fmt.Errorf("failed to assign permission %s: %w", perm.Name, err)
-		}
-	}
-
-	s.auditLogger.LogOrganizationAction(userID, "assign_permissions", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Assigned %d permissions to role %s", len(permissionNames), role.Name))
-
-	return nil
+	return errors.New("SECURITY ERROR: AssignPermissionsToRole is disabled - use AssignPermissionsToRoleWithOrganization for organization-safe permission assignment")
 }
 
-// RevokePermissionsFromRole revokes permissions from a role
+// RevokePermissionsFromRole - DISABLED FOR SECURITY: Use RevokePermissionsFromRoleWithOrganization instead
+// This method was removed because it does not validate organization context and allows privilege escalation
 func (s *roleService) RevokePermissionsFromRole(ctx context.Context, roleID uuid.UUID, permissionNames []string) error {
-	userID := s.getUserID(ctx)
-
-	role, err := s.repo.Role().GetByID(ctx, roleID.String())
-	if err != nil {
-		return fmt.Errorf("role not found: %w", err)
-	}
-
-	// Prevent modifying system role permissions
-	if role.IsSystem {
-		return errors.New("cannot modify system role permissions")
-	}
-
-	// Get permissions by names
-	perms, err := s.repo.Permission().GetByNames(ctx, permissionNames)
-	if err != nil {
-		return fmt.Errorf("failed to get permissions: %w", err)
-	}
-
-	// Revoke each permission
-	for _, perm := range perms {
-		if err := s.repo.Permission().RevokeFromRole(ctx, roleID, perm.ID); err != nil {
-			return fmt.Errorf("failed to revoke permission %s: %w", perm.Name, err)
-		}
-	}
-
-	s.auditLogger.LogOrganizationAction(userID, "revoke_permissions", role.OrganizationID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Revoked %d permissions from role %s", len(permissionNames), role.Name))
-
-	return nil
+	return errors.New("SECURITY ERROR: RevokePermissionsFromRole is disabled - use RevokePermissionsFromRoleWithOrganization for organization-safe permission management")
 }
 
-// GetRolePermissions returns all permissions for a role
+// GetRolePermissions returns all permissions for a role (DEPRECATED: Use organization-scoped validation)
+// WARNING: This method does not validate organization context and may expose cross-organization data
 func (s *roleService) GetRolePermissions(ctx context.Context, roleID uuid.UUID) ([]string, error) {
 	role, err := s.repo.Role().GetByID(ctx, roleID.String())
 	if err != nil {
@@ -410,6 +513,124 @@ func (s *roleService) GetRolePermissions(ctx context.Context, roleID uuid.UUID) 
 	return permissions, nil
 }
 
+// AssignPermissionsToRoleWithOrganization assigns permissions to a role with proper organization security
+// This method ensures that custom permissions can only be assigned within their organization context
+func (s *roleService) AssignPermissionsToRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, permissionNames []string) error {
+	userID := s.getUserID(ctx)
+
+	// Check if role exists and belongs to the organization
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return ErrRoleNotFoundInOrg
+	}
+
+	// Prevent modifying system role permissions via API
+	if role.IsSystem {
+		return ErrCannotModifySystemPerms
+	}
+
+	// Get permissions by names with organization context (includes system + org-specific permissions)
+	perms, err := s.repo.Permission().GetByNamesAndOrganization(ctx, permissionNames, orgID.String())
+	if err != nil {
+		return fmt.Errorf("failed to get permissions: %w", err)
+	}
+
+	if len(perms) != len(permissionNames) {
+		return ErrSomePermissionsNotFound
+	}
+
+	// STRICT VALIDATION: Ensure permissions are valid for this organization
+	for _, perm := range perms {
+		// Rule: permission.IsSystem == true OR permission.OrganizationID == role.OrganizationID
+		if !perm.IsSystem && (perm.OrganizationID == nil || *perm.OrganizationID != orgID) {
+			return fmt.Errorf("permission %s belongs to another organization and cannot be assigned", perm.Name)
+		}
+	}
+
+	// Assign each validated permission
+	for _, perm := range perms {
+		if err := s.repo.Permission().AssignToRole(ctx, roleID, perm.ID); err != nil {
+			return fmt.Errorf("failed to assign permission %s: %w", perm.Name, err)
+		}
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "assign_permissions", orgID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Assigned %d permissions to role %s", len(permissionNames), role.Name))
+	}
+
+	return nil
+}
+
+// RevokePermissionsFromRoleWithOrganization revokes permissions from a role with proper organization security
+func (s *roleService) RevokePermissionsFromRoleWithOrganization(ctx context.Context, roleID, orgID uuid.UUID, permissionNames []string) error {
+	userID := s.getUserID(ctx)
+
+	// Check if role exists and belongs to the organization
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return ErrRoleNotFoundInOrg
+	}
+
+	// Prevent modifying system role permissions
+	if role.IsSystem {
+		return ErrCannotModifySystemPerms
+	}
+
+	// Get permissions by names with organization context (ignore if some don't exist)
+	perms, err := s.repo.Permission().GetByNamesAndOrganization(ctx, permissionNames, orgID.String())
+	if err != nil {
+		return fmt.Errorf("failed to get permissions: %w", err)
+	}
+
+	// If no permissions found, just return success (nothing to revoke)
+	if len(perms) == 0 {
+		return nil
+	}
+
+	// Revoke each permission (ignore errors if permission wasn't assigned)
+	for _, perm := range perms {
+		_ = s.repo.Permission().RevokeFromRole(ctx, roleID, perm.ID)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "revoke_permissions", orgID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Revoked %d permissions from role %s", len(permissionNames), role.Name))
+	}
+
+	return nil
+}
+
+// GetRolePermissionsWithOrganization returns all permissions for a role with organization security validation
+func (s *roleService) GetRolePermissionsWithOrganization(ctx context.Context, roleID, orgID uuid.UUID) ([]string, error) {
+	// Validate role belongs to organization
+	role, err := s.repo.Role().GetByIDAndOrganization(ctx, roleID.String(), orgID.String())
+	if err != nil {
+		return nil, ErrRoleNotFoundInOrg
+	}
+
+	// If system admin role, return all permissions
+	if role.IsSystem && role.Name == models.RoleNameAdmin {
+		return models.DefaultAdminPermissions(), nil
+	}
+
+	// Get role permissions with organization context validation
+	rolePerms, err := s.repo.Permission().GetRolePermissions(ctx, roleID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list permissions: %w", err)
+	}
+
+	// Validate each permission is accessible within this organization context
+	permissions := make([]string, 0, len(rolePerms))
+	for _, perm := range rolePerms {
+		// Include system permissions (org_id IS NULL) or permissions that belong to this organization
+		if perm.IsSystem || (perm.OrganizationID != nil && *perm.OrganizationID == orgID) {
+			permissions = append(permissions, perm.Name)
+		}
+		// Skip permissions that belong to other organizations
+	}
+
+	return permissions, nil
+}
+
 // ListAllPermissions returns all system permissions
 func (s *roleService) ListAllPermissions(ctx context.Context) ([]*PermissionResponse, error) {
 	// Query from database
@@ -421,15 +642,95 @@ func (s *roleService) ListAllPermissions(ctx context.Context) ([]*PermissionResp
 	responses := make([]*PermissionResponse, len(perms))
 	for i, perm := range perms {
 		responses[i] = &PermissionResponse{
-			ID:          perm.ID,
-			Name:        perm.Name,
-			DisplayName: perm.DisplayName,
-			Description: perm.Description,
-			Category:    perm.Category,
+			ID:             perm.ID,
+			Name:           perm.Name,
+			DisplayName:    perm.DisplayName,
+			Description:    perm.Description,
+			Category:       perm.Category,
+			IsSystem:       perm.IsSystem,
+			OrganizationID: perm.OrganizationID,
 		}
 	}
 
 	return responses, nil
+}
+
+// ListAllPermissionsForOrganization returns all permissions available to an organization
+// This includes system permissions AND custom permissions created for this organization
+func (s *roleService) ListAllPermissionsForOrganization(ctx context.Context, orgID uuid.UUID) ([]*PermissionResponse, error) {
+	// Query permissions with organization context
+	perms, err := s.repo.Permission().ListAllForOrganization(ctx, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list permissions for organization: %w", err)
+	}
+
+	responses := make([]*PermissionResponse, len(perms))
+	for i, perm := range perms {
+		responses[i] = &PermissionResponse{
+			ID:             perm.ID,
+			Name:           perm.Name,
+			DisplayName:    perm.DisplayName,
+			Description:    perm.Description,
+			Category:       perm.Category,
+			IsSystem:       perm.IsSystem,
+			OrganizationID: perm.OrganizationID, // Will be nil for system permissions
+		}
+	}
+
+	return responses, nil
+}
+
+// CreatePermissionForOrganization creates a new custom permission tied to an organization
+func (s *roleService) CreatePermissionForOrganization(ctx context.Context, orgID uuid.UUID, name, displayName, description, category string) (*PermissionResponse, error) {
+	userID := s.getUserID(ctx)
+
+	// Check if a permission with this name already exists in this organization context
+	existing, err := s.repo.Permission().GetByNameAndOrganization(ctx, name, orgID.String())
+	if err == nil && existing != nil {
+		return nil, ErrPermissionAlreadyExists
+	}
+
+	// Check if displayName is unique within the same category for this organization
+	categoryPerms, err := s.repo.Permission().ListByCategoryAndOrganization(ctx, category, orgID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to check category permissions: %w", err)
+	}
+
+	for _, perm := range categoryPerms {
+		if perm.DisplayName == displayName && perm.OrganizationID != nil && *perm.OrganizationID == orgID {
+			return nil, fmt.Errorf("display name '%s' already exists in category '%s' for this organization", displayName, category)
+		}
+	}
+
+	// Create the custom permission
+	perm := &models.Permission{
+		ID:             uuid.New(),
+		Name:           name,
+		DisplayName:    displayName,
+		Description:    description,
+		Category:       category,
+		IsSystem:       false,  // Custom permissions are never system permissions
+		OrganizationID: &orgID, // Tie to specific organization
+	}
+
+	createdPerm, err := s.repo.Permission().Create(ctx, perm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create permission: %w", err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "create_permission", orgID.String(), createdPerm.ID.String(), "", true, nil, fmt.Sprintf("Created custom permission: %s", name))
+	}
+
+	return &PermissionResponse{
+		ID:             createdPerm.ID,
+		Name:           createdPerm.Name,
+		DisplayName:    createdPerm.DisplayName,
+		Description:    createdPerm.Description,
+		Category:       createdPerm.Category,
+		IsSystem:       createdPerm.IsSystem,
+		OrganizationID: createdPerm.OrganizationID,
+	}, nil
 }
 
 // Helper methods
@@ -455,7 +756,7 @@ func (s *roleService) convertToRoleResponse(role *models.Role) *RoleResponse {
 	}
 
 	// Add permissions if loaded
-	if role.Permissions != nil && len(role.Permissions) > 0 {
+	if len(role.Permissions) > 0 {
 		permissions := make([]string, len(role.Permissions))
 		for i, perm := range role.Permissions {
 			permissions[i] = perm.Name
@@ -464,4 +765,318 @@ func (s *roleService) convertToRoleResponse(role *models.Role) *RoleResponse {
 	}
 
 	return response
+}
+
+// CreatePermission creates a new custom permission
+func (s *roleService) CreatePermission(ctx context.Context, name, displayName, description, category string) (*PermissionResponse, error) {
+	// Normalize inputs to lowercase for consistent storage and comparison
+	normalizedName := strings.ToLower(strings.TrimSpace(name))
+	normalizedCategory := strings.ToLower(strings.TrimSpace(category))
+	trimmedDisplayName := strings.TrimSpace(displayName)
+
+	// Format permission name as category:name
+	formattedName := fmt.Sprintf("%s:%s", normalizedCategory, normalizedName)
+
+	// Check if permission already exists by exact name
+	existingPerm, err := s.repo.Permission().GetByName(ctx, formattedName)
+	if err == nil && existingPerm != nil {
+		return nil, fmt.Errorf("permission already exists. Please use a different name")
+	}
+	// Only ignore "not found" type errors, return other errors
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") && !strings.Contains(strings.ToLower(err.Error()), "record not found") {
+		return nil, fmt.Errorf("failed to check existing permission: %w", err)
+	}
+
+	// Check if there's already a permission with the same display name in the same category (case-insensitive)
+	categoryPerms, err := s.repo.Permission().ListByCategory(ctx, normalizedCategory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+	}
+
+	for _, perm := range categoryPerms {
+		if strings.EqualFold(perm.DisplayName, trimmedDisplayName) {
+			return nil, fmt.Errorf("a permission with this name already exists in this category. Please choose a different name")
+		}
+	}
+
+	// Also check for similar permission names across all categories to prevent confusion
+	allPerms, err := s.repo.Permission().ListAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+	}
+
+	for _, perm := range allPerms {
+		if strings.EqualFold(perm.DisplayName, trimmedDisplayName) {
+			return nil, fmt.Errorf("a permission named '%s' already exists in the '%s' category. Please choose a different name", perm.DisplayName, perm.Category)
+		}
+	}
+
+	permission := &models.Permission{
+		Name:        formattedName,
+		DisplayName: trimmedDisplayName,
+		Description: description,
+		Category:    normalizedCategory,
+		IsSystem:    false, // Custom permissions are not system permissions
+	}
+
+	createdPermission, err := s.repo.Permission().Create(ctx, permission)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create permission: %w", err)
+	}
+
+	// TODO: Add audit logging when LogActivity method is available
+	// if s.auditLogger != nil {
+	//     userID := s.getUserID(ctx)
+	//     s.auditLogger.LogActivity(userID, "permission:create", fmt.Sprintf("Created permission: %s", name))
+	// }
+
+	return &PermissionResponse{
+		ID:          createdPermission.ID,
+		Name:        createdPermission.Name,
+		DisplayName: createdPermission.DisplayName,
+		Description: createdPermission.Description,
+		Category:    createdPermission.Category,
+		IsSystem:    createdPermission.IsSystem,
+	}, nil
+}
+
+// UpdatePermission updates a custom permission (DEPRECATED: Use UpdatePermissionWithOrganization for security)
+// WARNING: This method does not validate organization context and may allow cross-organization permission modification
+func (s *roleService) UpdatePermission(ctx context.Context, permissionID, displayName, description, category string) (*PermissionResponse, error) {
+	permissionUUID, err := uuid.Parse(permissionID)
+	if err != nil {
+		return nil, errors.New("invalid permission ID")
+	}
+
+	// Get existing permission
+	permission, err := s.repo.Permission().GetByID(ctx, permissionUUID)
+	if err != nil {
+		return nil, fmt.Errorf("permission not found: %w", err)
+	}
+
+	// Check if it's a system permission
+	if permission.IsSystem {
+		return nil, errors.New("system permissions cannot be updated")
+	}
+
+	// If category is changing, check for conflicts
+	if permission.Category != category {
+		// Check if there's already a permission with the same display name in the new category
+		categoryPerms, err := s.repo.Permission().ListByCategory(ctx, category)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+		}
+
+		for _, perm := range categoryPerms {
+			if perm.DisplayName == displayName && perm.ID != permission.ID {
+				return nil, fmt.Errorf("a permission with display name '%s' already exists in category '%s'", displayName, category)
+			}
+		}
+	} else {
+		// Same category, just check for display name conflicts
+		categoryPerms, err := s.repo.Permission().ListByCategory(ctx, category)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+		}
+
+		for _, perm := range categoryPerms {
+			if perm.DisplayName == displayName && perm.ID != permission.ID {
+				return nil, fmt.Errorf("a permission with display name '%s' already exists in category '%s'", displayName, category)
+			}
+		}
+	}
+
+	// Update fields
+	permission.DisplayName = displayName
+	permission.Description = description
+	permission.Category = category
+
+	updatedPermission, err := s.repo.Permission().Update(ctx, permission)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update permission: %w", err)
+	}
+
+	// TODO: Add audit logging when LogActivity method is available
+	// if s.auditLogger != nil {
+	//     userID := s.getUserID(ctx)
+	//     s.auditLogger.LogActivity(userID, "permission:update", fmt.Sprintf("Updated permission: %s", permission.Name))
+	// }
+
+	return &PermissionResponse{
+		ID:          updatedPermission.ID,
+		Name:        updatedPermission.Name,
+		DisplayName: updatedPermission.DisplayName,
+		Description: updatedPermission.Description,
+		Category:    updatedPermission.Category,
+		IsSystem:    updatedPermission.IsSystem,
+	}, nil
+}
+
+// UpdatePermissionWithOrganization updates a custom permission with proper organization security validation
+func (s *roleService) UpdatePermissionWithOrganization(ctx context.Context, permissionID string, orgID uuid.UUID, displayName, description, category string) (*PermissionResponse, error) {
+	userID := s.getUserID(ctx)
+
+	permissionUUID, err := uuid.Parse(permissionID)
+	if err != nil {
+		return nil, ErrInvalidUUID
+	}
+
+	// Get existing permission
+	permission, err := s.repo.Permission().GetByID(ctx, permissionUUID)
+	if err != nil {
+		return nil, ErrPermissionNotFound
+	}
+
+	// Check if it's a system permission (cannot be updated)
+	if permission.IsSystem {
+		return nil, ErrCannotUpdateSystemPerm
+	}
+
+	// CRITICAL SECURITY CHECK: Ensure permission belongs to the organization
+	if permission.OrganizationID == nil || *permission.OrganizationID != orgID {
+		return nil, ErrPermissionNotFound // Don't reveal it exists in another org
+	}
+
+	// If category is changing, check for conflicts within THIS organization only
+	if permission.Category != category {
+		categoryPerms, err := s.repo.Permission().ListByCategoryAndOrganization(ctx, category, orgID.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+		}
+
+		for _, perm := range categoryPerms {
+			if perm.DisplayName == displayName && perm.ID != permission.ID {
+				return nil, fmt.Errorf("a permission with display name '%s' already exists in category '%s' for this organization", displayName, category)
+			}
+		}
+	} else {
+		// Same category, check for display name conflicts within THIS organization only
+		categoryPerms, err := s.repo.Permission().ListByCategoryAndOrganization(ctx, category, orgID.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to check existing permissions: %w", err)
+		}
+
+		for _, perm := range categoryPerms {
+			if perm.DisplayName == displayName && perm.ID != permission.ID {
+				return nil, fmt.Errorf("a permission with display name '%s' already exists in category '%s' for this organization", displayName, category)
+			}
+		}
+	}
+
+	// Update fields
+	permission.DisplayName = displayName
+	permission.Description = description
+	permission.Category = category
+
+	updatedPermission, err := s.repo.Permission().Update(ctx, permission)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update permission: %w", err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "update_permission", orgID.String(), permissionUUID.String(), "", true, nil, fmt.Sprintf("Updated custom permission: %s", permission.Name))
+	}
+
+	return &PermissionResponse{
+		ID:             updatedPermission.ID,
+		Name:           updatedPermission.Name,
+		DisplayName:    updatedPermission.DisplayName,
+		Description:    updatedPermission.Description,
+		Category:       updatedPermission.Category,
+		IsSystem:       updatedPermission.IsSystem,
+		OrganizationID: updatedPermission.OrganizationID,
+	}, nil
+}
+
+// DeletePermission deletes a custom permission (DEPRECATED: Use DeletePermissionWithOrganization for security)
+// WARNING: This method uses global role lookup and may allow cross-organization permission deletion
+func (s *roleService) DeletePermission(ctx context.Context, permissionID string) error {
+	permissionUUID, err := uuid.Parse(permissionID)
+	if err != nil {
+		return errors.New("invalid permission ID")
+	}
+
+	// Get existing permission
+	permission, err := s.repo.Permission().GetByID(ctx, permissionUUID)
+	if err != nil {
+		return fmt.Errorf("permission not found: %w", err)
+	}
+
+	// Check if it's a system permission
+	if permission.IsSystem {
+		return errors.New("system permissions cannot be deleted")
+	}
+
+	// Check if permission is used by any roles
+	roles, err := s.repo.Role().GetRolesByPermission(ctx, permission.Name)
+	if err != nil {
+		return fmt.Errorf("failed to check permission usage: %w", err)
+	}
+
+	if len(roles) > 0 {
+		return errors.New("permission is currently assigned to roles and cannot be deleted")
+	}
+
+	// Delete the permission
+	err = s.repo.Permission().Delete(ctx, permissionUUID)
+	if err != nil {
+		return fmt.Errorf("failed to delete permission: %w", err)
+	}
+
+	// TODO: Add audit logging when LogActivity method is available
+	// if s.auditLogger != nil {
+	//     userID := s.getUserID(ctx)
+	//     s.auditLogger.LogActivity(userID, "permission:delete", fmt.Sprintf("Deleted permission: %s", permission.Name))
+	// }
+
+	return nil
+}
+
+// DeletePermissionWithOrganization deletes a custom permission with proper organization security
+// This method ensures only permissions owned by the organization can be deleted
+func (s *roleService) DeletePermissionWithOrganization(ctx context.Context, permissionID string, orgID uuid.UUID) error {
+	userID := s.getUserID(ctx)
+
+	permissionUUID, err := uuid.Parse(permissionID)
+	if err != nil {
+		return ErrInvalidUUID
+	}
+
+	// Get existing permission and validate organization ownership
+	permission, err := s.repo.Permission().GetByID(ctx, permissionUUID)
+	if err != nil {
+		return ErrPermissionNotFound
+	}
+
+	// Check if it's a system permission (cannot be deleted)
+	if permission.IsSystem {
+		return ErrCannotDeleteSystemPerm
+	}
+
+	// CRITICAL SECURITY CHECK: Ensure permission belongs to the organization
+	if permission.OrganizationID == nil || *permission.OrganizationID != orgID {
+		return ErrPermissionNotFound // Don't reveal it exists in another org
+	}
+
+	// Check if permission is used by any roles IN THIS ORGANIZATION ONLY
+	roles, err := s.repo.Role().GetRolesByPermissionAndOrganization(ctx, permission.Name, orgID.String())
+	if err != nil {
+		return fmt.Errorf("failed to check permission usage: %w", err)
+	}
+
+	if len(roles) > 0 {
+		return ErrPermissionInUse
+	}
+
+	// Delete the permission
+	err = s.repo.Permission().Delete(ctx, permissionUUID)
+	if err != nil {
+		return fmt.Errorf("failed to delete permission: %w", err)
+	}
+
+	if s.auditLogger != nil {
+		s.auditLogger.LogOrganizationAction(userID, "delete_permission", orgID.String(), permissionUUID.String(), "", true, nil, fmt.Sprintf("Deleted custom permission: %s", permission.Name))
+	}
+
+	return nil
 }

@@ -7,17 +7,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// Role represents a custom role within an organization
+// Role represents a custom role within an organization OR a global system role
+// System roles: IsSystem=true, OrganizationID=NULL (managed by superadmin only)
+// Custom roles: IsSystem=false, OrganizationID=required (managed by org admins)
 type Role struct {
-	ID             uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	OrganizationID uuid.UUID `json:"organization_id" gorm:"type:uuid;not null;index:idx_org_role,unique"`
-	Name           string    `json:"name" gorm:"not null;index:idx_org_role,unique"` // e.g., "admin", "issuer", "rto", "student", or custom
-	DisplayName    string    `json:"display_name" gorm:"not null"`
-	Description    string    `json:"description"`
-	IsSystem       bool      `json:"is_system" gorm:"default:false"` // true for default roles (admin), false for custom roles
-	CreatedBy      uuid.UUID `json:"created_by" gorm:"type:uuid"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	OrganizationID *uuid.UUID `json:"organization_id" gorm:"type:uuid;index:idx_org_role"` // NULL for system roles, required for custom roles
+	Name           string     `json:"name" gorm:"not null;index:idx_role_name_org"`        // e.g., "admin", "issuer", "rto", "student", or custom
+	DisplayName    string     `json:"display_name" gorm:"not null"`
+	Description    string     `json:"description"`
+	IsSystem       bool       `json:"is_system" gorm:"default:false;index:idx_role_system"` // true for system roles (superadmin only), false for custom roles
+	CreatedBy      uuid.UUID  `json:"created_by" gorm:"type:uuid"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 
 	// Relations
 	Organization *Organization `json:"organization,omitempty" gorm:"foreignKey:OrganizationID"`
@@ -34,13 +36,18 @@ func (r *Role) BeforeCreate(tx *gorm.DB) error {
 
 // Permission represents a specific permission that can be assigned to roles
 type Permission struct {
-	ID          uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	Name        string    `json:"name" gorm:"uniqueIndex;not null"` // e.g., "member:invite", "cert:issue"
-	DisplayName string    `json:"display_name" gorm:"not null"`
-	Description string    `json:"description"`
-	Category    string    `json:"category" gorm:"not null"` // e.g., "organization", "member", "certificate"
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	Name           string     `json:"name" gorm:"not null;index:idx_permission_name_org,unique"` // e.g., "member:invite", "cert:issue"
+	DisplayName    string     `json:"display_name" gorm:"not null"`
+	Description    string     `json:"description"`
+	Category       string     `json:"category" gorm:"not null"`                                              // e.g., "organization", "member", "certificate"
+	IsSystem       bool       `json:"is_system" gorm:"default:false"`                                        // true for seeded permissions, false for custom
+	OrganizationID *uuid.UUID `json:"organization_id" gorm:"type:uuid;index:idx_permission_name_org,unique"` // NULL for system permissions, set for custom permissions
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// Relations
+	Organization *Organization `json:"organization,omitempty" gorm:"foreignKey:OrganizationID"`
 }
 
 // BeforeCreate will set a UUID rather than numeric ID.
@@ -102,32 +109,32 @@ const (
 func DefaultPermissions() []Permission {
 	return []Permission{
 		// Organization
-		{Name: PermissionOrgUpdate, DisplayName: "Update Organization", Description: "Update organization details", Category: "organization"},
-		{Name: PermissionOrgDelete, DisplayName: "Delete Organization", Description: "Delete organization", Category: "organization"},
-		{Name: PermissionOrgView, DisplayName: "View Organization", Description: "View organization details", Category: "organization"},
+		{Name: PermissionOrgUpdate, DisplayName: "Update Organization", Description: "Update organization details", Category: "organization", IsSystem: true},
+		{Name: PermissionOrgDelete, DisplayName: "Delete Organization", Description: "Delete organization", Category: "organization", IsSystem: true},
+		{Name: PermissionOrgView, DisplayName: "View Organization", Description: "View organization details", Category: "organization", IsSystem: true},
 
 		// Members
-		{Name: PermissionMemberInvite, DisplayName: "Invite Members", Description: "Invite new members to organization", Category: "member"},
-		{Name: PermissionMemberRemove, DisplayName: "Remove Members", Description: "Remove members from organization", Category: "member"},
-		{Name: PermissionMemberUpdate, DisplayName: "Update Members", Description: "Update member roles and details", Category: "member"},
-		{Name: PermissionMemberView, DisplayName: "View Members", Description: "View organization members", Category: "member"},
+		{Name: PermissionMemberInvite, DisplayName: "Invite Members", Description: "Invite new members to organization", Category: "member", IsSystem: true},
+		{Name: PermissionMemberRemove, DisplayName: "Remove Members", Description: "Remove members from organization", Category: "member", IsSystem: true},
+		{Name: PermissionMemberUpdate, DisplayName: "Update Members", Description: "Update member roles and details", Category: "member", IsSystem: true},
+		{Name: PermissionMemberView, DisplayName: "View Members", Description: "View organization members", Category: "member", IsSystem: true},
 
 		// Invitations
-		{Name: PermissionInvitationView, DisplayName: "View Invitations", Description: "View pending invitations", Category: "invitation"},
-		{Name: PermissionInvitationResend, DisplayName: "Resend Invitations", Description: "Resend pending invitations", Category: "invitation"},
-		{Name: PermissionInvitationCancel, DisplayName: "Cancel Invitations", Description: "Cancel pending invitations", Category: "invitation"},
+		{Name: PermissionInvitationView, DisplayName: "View Invitations", Description: "View pending invitations", Category: "invitation", IsSystem: true},
+		{Name: PermissionInvitationResend, DisplayName: "Resend Invitations", Description: "Resend pending invitations", Category: "invitation", IsSystem: true},
+		{Name: PermissionInvitationCancel, DisplayName: "Cancel Invitations", Description: "Cancel pending invitations", Category: "invitation", IsSystem: true},
 
 		// Roles
-		{Name: PermissionRoleCreate, DisplayName: "Create Roles", Description: "Create custom roles", Category: "role"},
-		{Name: PermissionRoleUpdate, DisplayName: "Update Roles", Description: "Update role permissions", Category: "role"},
-		{Name: PermissionRoleDelete, DisplayName: "Delete Roles", Description: "Delete custom roles", Category: "role"},
-		{Name: PermissionRoleView, DisplayName: "View Roles", Description: "View organization roles", Category: "role"},
+		{Name: PermissionRoleCreate, DisplayName: "Create Roles", Description: "Create custom roles", Category: "role", IsSystem: true},
+		{Name: PermissionRoleUpdate, DisplayName: "Update Roles", Description: "Update role permissions", Category: "role", IsSystem: true},
+		{Name: PermissionRoleDelete, DisplayName: "Delete Roles", Description: "Delete custom roles", Category: "role", IsSystem: true},
+		{Name: PermissionRoleView, DisplayName: "View Roles", Description: "View organization roles", Category: "role", IsSystem: true},
 
 		// Certificates
-		{Name: PermissionCertIssue, DisplayName: "Issue Certificates", Description: "Issue new certificates", Category: "certificate"},
-		{Name: PermissionCertRevoke, DisplayName: "Revoke Certificates", Description: "Revoke issued certificates", Category: "certificate"},
-		{Name: PermissionCertVerify, DisplayName: "Verify Certificates", Description: "Verify certificate authenticity", Category: "certificate"},
-		{Name: PermissionCertView, DisplayName: "View Certificates", Description: "View certificates", Category: "certificate"},
+		{Name: PermissionCertIssue, DisplayName: "Issue Certificates", Description: "Issue new certificates", Category: "certificate", IsSystem: true},
+		{Name: PermissionCertRevoke, DisplayName: "Revoke Certificates", Description: "Revoke issued certificates", Category: "certificate", IsSystem: true},
+		{Name: PermissionCertVerify, DisplayName: "Verify Certificates", Description: "Verify certificate authenticity", Category: "certificate", IsSystem: true},
+		{Name: PermissionCertView, DisplayName: "View Certificates", Description: "View certificates", Category: "certificate", IsSystem: true},
 	}
 }
 

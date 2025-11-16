@@ -6,6 +6,7 @@ import LoadingSpinner from '@/components/ui/loading-spinner'
 import { Toaster } from '@/components/ui/toaster'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
+import VerifyEmail from '@/pages/VerifyEmail'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
 import AcceptInvitation from '@/pages/AcceptInvitation'
@@ -15,6 +16,7 @@ import Dashboard from '@/pages/Dashboard'
 import Profile from '@/pages/Profile'
 import Settings from '@/pages/Settings'
 import Members from '@/pages/Members'
+import RoleManagement from '@/pages/RoleManagement'
 import Admin from '@/pages/Admin'
 
 // Create a client
@@ -26,6 +28,12 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+// Router future flags for React Router v7 compatibility
+const routerFutureFlags = {
+  v7_startTransition: true,
+  v7_relativeSplatPath: true,
+}
 
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -66,7 +74,7 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <Router future={routerFutureFlags}>
         <div className="App">
           <Routes>
             {/* Public routes */}
@@ -83,6 +91,14 @@ function App() {
               element={
                 <PublicRoute>
                   <Register />
+                </PublicRoute>
+              }
+            />
+            <Route
+              path="/verify-email"
+              element={
+                <PublicRoute>
+                  <VerifyEmail />
                 </PublicRoute>
               }
             />
@@ -149,6 +165,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Members />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/roles"
+              element={
+                <ProtectedRoute>
+                  <RoleManagement />
                 </ProtectedRoute>
               }
             />

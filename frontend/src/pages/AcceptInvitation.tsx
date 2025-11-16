@@ -5,7 +5,7 @@ import { Mail, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import useAuthStore from '@/store/auth'
-import api from '@/lib/axios-instance'
+import { authAPI } from '@/lib/api'
 
 const AcceptInvitation = () => {
   const navigate = useNavigate()
@@ -20,15 +20,20 @@ const AcceptInvitation = () => {
   const email = searchParams.get('email')
 
   const acceptInvitation = async () => {
+    if (!token) {
+      setError('Invalid invitation token')
+      return
+    }
+
     try {
       setLoading(true)
       setError('')
 
-      const response = await api.post(`/invitations/${token}/accept`)
+      const response = await authAPI.acceptInvitation(token)
 
-      if (response.data.success) {
+      if (response.success) {
         setSuccess(true)
-        setInvitationDetails(response.data.data)
+        setInvitationDetails(response.data)
         
         // Refresh user's organizations list to include the newly joined org
         await getMyOrganizations()

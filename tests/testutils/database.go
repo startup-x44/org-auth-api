@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/lib/pq" // PostgreSQL driver
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -30,148 +31,122 @@ func SetupTestDB(t *testing.T) *TestDB {
 	// Generate unique database name for this test
 	dbName := fmt.Sprintf("auth_test_%s", uuid.New().String()[:8])
 
+	// Get database connection parameters from environment or use defaults
+	host := getEnvOrDefault("DB_HOST", "localhost")
+	port := getEnvOrDefault("DB_PORT", "5432")
+	user := getEnvOrDefault("DB_USER", "postgres")
+	password := getEnvOrDefault("DB_PASSWORD", "password")
+
 	// Connect to postgres database to create test database
-	adminDB := connectToAdminDB(t)
-	defer func() {
-		sqlDB, _ := adminDB.DB()
-		sqlDB.Close()
-	}()
+	postgresDS := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable TimeZone=UTC",
+		host, port, user, password)
+
+	sqlDB, err := sql.Open("postgres", postgresDS)
+	if err != nil {
+		t.Skipf("Cannot connect to PostgreSQL for testing: %v", err)
+		return nil
+	}
+	defer sqlDB.Close()
 
 	// Create test database
-	createTestDatabase(t, adminDB, dbName)
+	_, err = sqlDB.Exec(fmt.Sprintf("CREATE DATABASE %s", dbName))
+	if err != nil {
+		t.Skipf("Cannot create test database: %v", err)
+		return nil
+	}
 
-	// Connect to test database
-	testDB := connectToTestDB(t, dbName)
+	// Connect to the test database
+	testDSN := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=UTC",
+		host, port, user, password, dbName)
+
+	db, err := gorm.Open(postgres.Open(testDSN), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent), // Suppress logs during tests
+	})
+	require.NoError(t, err)
+
+	testSQLDB, err := db.DB()
+	require.NoError(t, err)
 
 	// Run migrations
-	runMigrations(t, testDB)
+	err = runMigrations(db)
+	require.NoError(t, err)
 
-	return &TestDB{
-		DB:       testDB,
+	testDB := &TestDB{
+		DB:       db,
+		SQLDB:    testSQLDB,
 		Database: dbName,
 	}
+
+	// Cleanup function to drop database after test
+	t.Cleanup(func() {
+		testDB.Cleanup(t)
+	})
+
+	return testDB
 }
 
-// TeardownTestDB cleans up the test database
-func (tdb *TestDB) TeardownTestDB(t *testing.T) {
+// Cleanup drops the test database
+func (tdb *TestDB) Cleanup(t *testing.T) {
 	t.Helper()
 
-	// Close the test database connection
-	if sqlDB, err := tdb.DB.DB(); err == nil {
-		sqlDB.Close()
+	if tdb.SQLDB != nil {
+		tdb.SQLDB.Close()
 	}
 
-	// Connect to admin database to drop test database
-	adminDB := connectToAdminDB(t)
-	defer func() {
-		sqlDB, _ := adminDB.DB()
-		sqlDB.Close()
-	}()
+	// Get database connection parameters
+	host := getEnvOrDefault("DB_HOST", "localhost")
+	port := getEnvOrDefault("DB_PORT", "5432")
+	user := getEnvOrDefault("DB_USER", "postgres")
+	password := getEnvOrDefault("DB_PASSWORD", "password")
 
-	dropTestDatabase(t, adminDB, tdb.Database)
+	// Connect to postgres database to drop test database
+	postgresDS := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable TimeZone=UTC",
+		host, port, user, password)
+
+	sqlDB, err := sql.Open("postgres", postgresDS)
+	if err != nil {
+		t.Logf("Cannot connect to PostgreSQL for cleanup: %v", err)
+		return
+	}
+	defer sqlDB.Close()
+
+	// Drop test database
+	_, err = sqlDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", tdb.Database))
+	if err != nil {
+		t.Logf("Cannot drop test database %s: %v", tdb.Database, err)
+	}
 }
 
-// connectToAdminDB connects to the postgres admin database
-func connectToAdminDB(t *testing.T) *gorm.DB {
-	dsn := getTestDSN("postgres")
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err)
-	return db
-}
-
-// connectToTestDB connects to the specific test database
-func connectToTestDB(t *testing.T, dbName string) *gorm.DB {
-	dsn := getTestDSN(dbName)
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err)
-
-	return db
-}
-
-// createTestDatabase creates a new test database
-func createTestDatabase(t *testing.T, db *gorm.DB, dbName string) {
-	query := fmt.Sprintf("CREATE DATABASE %s", dbName)
-	err := db.Exec(query).Error
-	require.NoError(t, err)
-}
-
-// dropTestDatabase drops the test database
-func dropTestDatabase(t *testing.T, db *gorm.DB, dbName string) {
-	// Terminate active connections first
-	terminateQuery := fmt.Sprintf(`
-		SELECT pg_terminate_backend(pid)
-		FROM pg_stat_activity
-		WHERE datname = '%s' AND pid <> pg_backend_pid()`, dbName)
-	db.Exec(terminateQuery)
-
-	// Drop the database
-	query := fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)
-	err := db.Exec(query).Error
-	require.NoError(t, err)
-}
-
-// runMigrations runs database migrations for testing
-func runMigrations(t *testing.T, db *gorm.DB) {
+// runMigrations runs the database migrations for testing
+func runMigrations(db *gorm.DB) error {
 	// Auto-migrate all models
-	err := db.AutoMigrate(
+	return db.AutoMigrate(
 		&models.User{},
-		&models.Tenant{},
+		&models.Organization{},
+		&models.OrganizationMembership{},
+		&models.OrganizationInvitation{},
+		&models.Role{},
+		&models.Permission{},
+		&models.RolePermission{},
 		&models.UserSession{},
 		&models.RefreshToken{},
 		&models.PasswordReset{},
 		&models.FailedLoginAttempt{},
 	)
-	require.NoError(t, err)
-}
-
-// getTestDSN returns the database connection string for testing
-func getTestDSN(dbName string) string {
-	host := getEnvOrDefault("TEST_DB_HOST", "localhost")
-	port := getEnvOrDefault("TEST_DB_PORT", "5432")
-	user := getEnvOrDefault("TEST_DB_USER", "auth_user")
-	password := getEnvOrDefault("TEST_DB_PASSWORD", "auth_password")
-	sslmode := getEnvOrDefault("TEST_DB_SSLMODE", "disable")
-
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, user, password, dbName, sslmode)
-}
-
-// getEnvOrDefault returns environment variable value or default
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// CreateTestTenant creates a test tenant for testing
-func CreateTestTenant(t *testing.T, db *gorm.DB, name, domain string) *models.Tenant {
-	t.Helper()
-
-	tenant := &models.Tenant{
-		Name:   name,
-		Domain: domain,
-	}
-
-	err := db.Create(tenant).Error
-	require.NoError(t, err)
-
-	return tenant
 }
 
 // CreateTestUser creates a test user for testing
-func CreateTestUser(t *testing.T, db *gorm.DB, email, password, userType string, tenantID uuid.UUID) *models.User {
+func CreateTestUser(t *testing.T, db *gorm.DB, email string) *models.User {
 	t.Helper()
 
+	firstName := "Test"
+	lastName := "User"
 	user := &models.User{
+		ID:           uuid.New(),
 		Email:        email,
-		PasswordHash: password,
-		IsSuperadmin: false,
-		GlobalRole:   "user",
+		PasswordHash: "$argon2id$v=19$m=65536,t=3,p=2$somehashedpassword", // Mock password hash
+		Firstname:    &firstName,
+		Lastname:     &lastName,
 		Status:       "active",
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -183,22 +158,97 @@ func CreateTestUser(t *testing.T, db *gorm.DB, email, password, userType string,
 	return user
 }
 
+// CreateTestOrganization creates a test organization for testing
+func CreateTestOrganization(t *testing.T, db *gorm.DB, name, slug string) *models.Organization {
+	t.Helper()
+
+	org := &models.Organization{
+		ID:        uuid.New(),
+		Name:      name,
+		Slug:      slug,
+		Status:    "active",
+		CreatedBy: uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	err := db.Create(org).Error
+	require.NoError(t, err)
+
+	return org
+}
+
+// CreateTestRole creates a test role for testing
+func CreateTestRole(t *testing.T, db *gorm.DB, orgID uuid.UUID, name string) *models.Role {
+	t.Helper()
+
+	role := &models.Role{
+		ID:             uuid.New(),
+		OrganizationID: &orgID,
+		Name:           name,
+		DisplayName:    name,
+		IsSystem:       false,
+		CreatedBy:      uuid.New(),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	err := db.Create(role).Error
+	require.NoError(t, err)
+
+	return role
+}
+
+// CreateTestPermission creates a test permission for testing
+func CreateTestPermission(t *testing.T, db *gorm.DB, name string, orgID *uuid.UUID, isSystem bool) *models.Permission {
+	t.Helper()
+
+	perm := &models.Permission{
+		ID:             uuid.New(),
+		Name:           name,
+		DisplayName:    name,
+		Category:       "test",
+		IsSystem:       isSystem,
+		OrganizationID: orgID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	err := db.Create(perm).Error
+	require.NoError(t, err)
+
+	return perm
+}
+
 // CleanTestData cleans all test data from tables
 func CleanTestData(t *testing.T, db *gorm.DB) {
 	t.Helper()
 
 	// Clean in order to respect foreign key constraints
 	tables := []string{
+		"role_permissions",
+		"organization_invitations",
+		"organization_memberships",
 		"failed_login_attempts",
 		"password_resets",
 		"refresh_tokens",
 		"user_sessions",
+		"permissions",
+		"roles",
 		"users",
-		"tenants",
+		"organizations",
 	}
 
 	for _, table := range tables {
 		err := db.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error
 		require.NoError(t, err)
 	}
+}
+
+// getEnvOrDefault gets environment variable or returns default value
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

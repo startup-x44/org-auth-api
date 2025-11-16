@@ -99,7 +99,8 @@ func (r *repository) Permission() PermissionRepository {
 	return r.permRepo
 }
 
-// CreateDefaultAdminRole creates the default admin role for an organization with all permissions
+// CreateDefaultAdminRole creates the default OWNER role for an organization with all permissions
+// This is a CUSTOM role (IsSystem=false) specific to the organization
 func (r *repository) CreateDefaultAdminRole(ctx context.Context, orgID, createdBy string) (*models.Role, error) {
 	orgUUID, err := uuid.Parse(orgID)
 	if err != nil {
@@ -111,39 +112,41 @@ func (r *repository) CreateDefaultAdminRole(ctx context.Context, orgID, createdB
 		return nil, fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	// Create admin role
-	adminRole := &models.Role{
-		OrganizationID: orgUUID,
-		Name:           models.RoleNameAdmin,
-		DisplayName:    "Administrator",
-		Description:    "Full access to all organization features",
-		IsSystem:       true,
+	// Create OWNER role - this is a CUSTOM role, NOT a system role
+	ownerRole := &models.Role{
+		OrganizationID: &orgUUID,
+		Name:           "owner", // Use "owner" instead of "admin" to differentiate from system roles
+		DisplayName:    "Owner",
+		Description:    "Full access to all organization features (organization owner)",
+		IsSystem:       false, // CUSTOM role, not system
 		CreatedBy:      createdByUUID,
 	}
 
-	if err := r.db.WithContext(ctx).Create(adminRole).Error; err != nil {
-		return nil, fmt.Errorf("failed to create admin role: %w", err)
+	if err := r.db.WithContext(ctx).Create(ownerRole).Error; err != nil {
+		return nil, fmt.Errorf("failed to create owner role: %w", err)
 	}
 
-	// Get all permissions
+	// Get all SYSTEM permissions (these are global and available to all orgs)
 	var permissions []models.Permission
 	adminPermNames := models.DefaultAdminPermissions()
-	if err := r.db.WithContext(ctx).Where("name IN ?", adminPermNames).Find(&permissions).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Where("name IN ? AND is_system = ? AND organization_id IS NULL", adminPermNames, true).
+		Find(&permissions).Error; err != nil {
 		return nil, fmt.Errorf("failed to get permissions: %w", err)
 	}
 
-	// Assign all permissions to admin role
+	// Assign all system permissions to owner role
 	for _, perm := range permissions {
 		rolePermission := &models.RolePermission{
-			RoleID:       adminRole.ID,
+			RoleID:       ownerRole.ID,
 			PermissionID: perm.ID,
 		}
 		if err := r.db.WithContext(ctx).Create(rolePermission).Error; err != nil {
-			return nil, fmt.Errorf("failed to assign permission %s to admin: %w", perm.Name, err)
+			return nil, fmt.Errorf("failed to assign permission %s to owner: %w", perm.Name, err)
 		}
 	}
 
-	return adminRole, nil
+	return ownerRole, nil
 }
 
 // BeginTransaction starts a new database transaction

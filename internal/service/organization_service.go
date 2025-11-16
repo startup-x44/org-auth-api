@@ -33,12 +33,12 @@ type OrganizationService interface {
 	GetMembership(ctx context.Context, orgID, userID string) (*models.OrganizationMembership, error)
 	UpdateMembership(ctx context.Context, orgID, userID string, req *UpdateMembershipRequest) (*models.OrganizationMembership, error)
 	RemoveMember(ctx context.Context, orgID, userID string) error
-	ListMembers(ctx context.Context, orgID string) ([]*OrganizationMember, error)
+	ListMembers(ctx context.Context, orgID string, search ...string) ([]*OrganizationMember, error)
 
 	// Invitation management
 	CancelInvitation(ctx context.Context, invitationID string) error
 	ResendInvitation(ctx context.Context, invitationID string) (*models.OrganizationInvitation, error)
-	ListPendingInvitations(ctx context.Context, orgID string) ([]*models.OrganizationInvitation, error)
+	ListPendingInvitations(ctx context.Context, orgID string, search ...string) ([]*models.OrganizationInvitation, error)
 }
 
 // CreateOrganizationRequest represents organization creation request
@@ -146,17 +146,18 @@ func (s *organizationService) CreateOrganization(ctx context.Context, req *Creat
 		return nil, fmt.Errorf("failed to create organization: %w", err)
 	}
 
-	// Create default admin role with all permissions
-	adminRole, err := s.repo.CreateDefaultAdminRole(ctx, org.ID.String(), userID)
+	// Create default OWNER role (CUSTOM role, not system) with all permissions
+	// This replaces the previous admin role creation
+	ownerRole, err := s.repo.CreateDefaultAdminRole(ctx, org.ID.String(), userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create admin role: %w", err)
+		return nil, fmt.Errorf("failed to create owner role: %w", err)
 	}
 
-	// Add creator as admin member with admin role
+	// Add creator as owner member with owner role
 	membership := &models.OrganizationMembership{
 		OrganizationID: org.ID,
 		UserID:         uuid.MustParse(userID),
-		RoleID:         adminRole.ID, // Use the created admin role ID
+		RoleID:         ownerRole.ID, // Use the created owner role ID
 		Status:         models.MembershipStatusActive,
 		JoinedAt:       &org.CreatedAt,
 	}
@@ -304,6 +305,11 @@ func (s *organizationService) InviteUser(ctx context.Context, req *InviteUserReq
 		return nil, fmt.Errorf("role not found: %w", err)
 	}
 
+	// Prevent inviting users with system roles (admin)
+	if role.IsSystem {
+		return nil, errors.New("cannot invite users with system roles - admin role is reserved for organization owners")
+	}
+
 	// Generate invitation token
 	token := generateSecureToken()
 
@@ -436,6 +442,17 @@ func (s *organizationService) UpdateMembership(ctx context.Context, orgID, userI
 		return nil, err
 	}
 
+	// Get organization to check if user is the owner
+	org, err := s.repo.Organization().GetByID(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("organization not found: %w", err)
+	}
+
+	// Prevent changing the organization owner's role
+	if org.CreatedBy.String() == userID {
+		return nil, errors.New("cannot change the organization owner's role")
+	}
+
 	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID, userID)
 	if err != nil {
 		return nil, err
@@ -448,6 +465,12 @@ func (s *organizationService) UpdateMembership(ctx context.Context, orgID, userI
 		if err != nil {
 			return nil, fmt.Errorf("role not found: %w", err)
 		}
+
+		// Prevent assigning system roles (admin) through membership update
+		if role.IsSystem {
+			return nil, errors.New("cannot assign system roles - admin role is reserved for organization owners")
+		}
+
 		membership.RoleID = role.ID
 	}
 	if req.Status != "" {
@@ -472,6 +495,17 @@ func (s *organizationService) RemoveMember(ctx context.Context, orgID, userID st
 		return err
 	}
 
+	// Get organization to check if user is the owner
+	org, err := s.repo.Organization().GetByID(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("organization not found: %w", err)
+	}
+
+	// Prevent removing the organization owner
+	if org.CreatedBy.String() == userID {
+		return errors.New("cannot remove the organization owner")
+	}
+
 	if err := s.repo.OrganizationMembership().Delete(ctx, orgID, userID); err != nil {
 		return fmt.Errorf("failed to remove member: %w", err)
 	}
@@ -482,17 +516,40 @@ func (s *organizationService) RemoveMember(ctx context.Context, orgID, userID st
 }
 
 // ListMembers lists organization members
-func (s *organizationService) ListMembers(ctx context.Context, orgID string) ([]*OrganizationMember, error) {
+func (s *organizationService) ListMembers(ctx context.Context, orgID string, search ...string) ([]*OrganizationMember, error) {
+	var searchTerm string
+	if len(search) > 0 {
+		searchTerm = search[0]
+	}
+
 	memberships, err := s.repo.OrganizationMembership().GetByOrganization(ctx, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list members: %w", err)
 	}
 
-	members := make([]*OrganizationMember, len(memberships))
-	for i, membership := range memberships {
+	members := make([]*OrganizationMember, 0, len(memberships))
+	for _, membership := range memberships {
 		user, err := s.repo.User().GetByID(ctx, membership.UserID.String())
 		if err != nil {
 			continue // Skip if user not found
+		}
+
+		// Apply search filter if provided
+		if searchTerm != "" {
+			searchLower := strings.ToLower(searchTerm)
+			emailMatch := strings.Contains(strings.ToLower(user.Email), searchLower)
+
+			var firstnameMatch, lastnameMatch bool
+			if user.Firstname != nil {
+				firstnameMatch = strings.Contains(strings.ToLower(*user.Firstname), searchLower)
+			}
+			if user.Lastname != nil {
+				lastnameMatch = strings.Contains(strings.ToLower(*user.Lastname), searchLower)
+			}
+
+			if !emailMatch && !firstnameMatch && !lastnameMatch {
+				continue // Skip if search doesn't match
+			}
 		}
 
 		// Load role information
@@ -510,7 +567,7 @@ func (s *organizationService) ListMembers(ctx context.Context, orgID string) ([]
 			}
 		}
 
-		members[i] = &OrganizationMember{
+		members = append(members, &OrganizationMember{
 			UserID:         user.ID.String(),
 			Email:          user.Email,
 			FirstName:      user.Firstname,
@@ -520,7 +577,7 @@ func (s *organizationService) ListMembers(ctx context.Context, orgID string) ([]
 			Status:         membership.Status,
 			JoinedAt:       membership.JoinedAt,
 			LastActivityAt: membership.LastActivityAt,
-		}
+		})
 	}
 
 	return members, nil
@@ -617,7 +674,12 @@ func (s *organizationService) ResendInvitation(ctx context.Context, invitationID
 }
 
 // ListPendingInvitations lists pending invitations for an organization
-func (s *organizationService) ListPendingInvitations(ctx context.Context, orgID string) ([]*models.OrganizationInvitation, error) {
+func (s *organizationService) ListPendingInvitations(ctx context.Context, orgID string, search ...string) ([]*models.OrganizationInvitation, error) {
+	var searchTerm string
+	if len(search) > 0 {
+		searchTerm = search[0]
+	}
+
 	userID, _ := ctx.Value("user_id").(string)
 
 	// Check admin permission
@@ -625,7 +687,26 @@ func (s *organizationService) ListPendingInvitations(ctx context.Context, orgID 
 		return nil, err
 	}
 
-	return s.repo.OrganizationInvitation().GetPendingByOrganization(ctx, orgID)
+	invitations, err := s.repo.OrganizationInvitation().GetPendingByOrganization(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply search filter if provided
+	if searchTerm != "" {
+		searchLower := strings.ToLower(searchTerm)
+		filteredInvitations := make([]*models.OrganizationInvitation, 0, len(invitations))
+
+		for _, invitation := range invitations {
+			if strings.Contains(strings.ToLower(invitation.Email), searchLower) {
+				filteredInvitations = append(filteredInvitations, invitation)
+			}
+		}
+
+		return filteredInvitations, nil
+	}
+
+	return invitations, nil
 }
 
 // Helper methods
@@ -654,7 +735,7 @@ func (s *organizationService) validateInviteUserRequest(req *InviteUserRequest) 
 	}
 
 	if req.RoleName == "" {
-		req.RoleName = "student" // Default role
+		return errors.New("role is required")
 	}
 
 	// Role validation will happen when looking up the role in the database

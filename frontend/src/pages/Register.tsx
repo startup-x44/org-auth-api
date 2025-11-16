@@ -10,7 +10,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import useAuthStore from '@/store/auth'
-import api from '@/lib/axios-instance'
 import type { RegisterRequest } from '@/lib/types'
 
 const Register = () => {
@@ -18,7 +17,7 @@ const Register = () => {
   const [searchParams] = useSearchParams()
   const invitationToken = searchParams.get('invitation_token')
   const invitationEmail = searchParams.get('email') // Email from invitation link
-  const { register, loading, error, isAuthenticated, getMyOrganizations } = useAuthStore()
+  const { register, loading, error, isAuthenticated, clearError } = useAuthStore()
 
   const [formData, setFormData] = useState<RegisterRequest>({
     first_name: '',
@@ -48,6 +47,12 @@ const Register = () => {
     }
   }, [isAuthenticated, navigate])
 
+  // Clear errors when component mounts
+  useEffect(() => {
+    if (clearError) clearError()
+    setLocalError('')
+  }, [])
+
   // Pre-fill email from invitation
   useEffect(() => {
     if (invitationEmail) {
@@ -69,6 +74,7 @@ const Register = () => {
     }
 
     if (localError) setLocalError('')
+    if (error && clearError) clearError()
   }
 
   const checkPasswordStrength = (password: string) => {
@@ -132,15 +138,8 @@ const Register = () => {
 
     const result = await register(registrationData)
     if (result.success) {
-      // If user came from invitation, redirect to login (invitation already accepted during registration)
-      if (invitationToken) {
-        // Redirect to login - they're already a member of the organization now
-        navigate(`/login?email=${encodeURIComponent(formData.email)}`, { replace: true })
-        return
-      }
-      
-      // Normal flow: redirect to create organization
-      navigate('/create-organization', { replace: true })
+      // Redirect to email verification page
+      navigate(`/verify-email?email=${encodeURIComponent(formData.email)}`, { replace: true })
     } else {
       setLocalError(result.message || 'Registration failed')
     }

@@ -14,16 +14,6 @@ const ChooseOrganization: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
-  // No need to fetch organizations - they're already loaded from login
-  // useEffect(() => {
-  //   getMyOrganizations();
-  // }, [getMyOrganizations]);
-
-  // No need to fetch organizations - they're already loaded from login
-  // useEffect(() => {
-  //   getMyOrganizations();
-  // }, [getMyOrganizations]);
-
   const handleSelectOrganization = async (orgId: string) => {
     setLoading(true);
     setError('');

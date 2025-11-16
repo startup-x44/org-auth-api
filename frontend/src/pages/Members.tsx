@@ -34,7 +34,9 @@ import {
 import { useToast } from '@/hooks/use-toast'
 import useAuthStore from '@/store/auth'
 import InviteMemberModal from '@/components/InviteMemberModal'
-import api from '@/lib/axios-instance'
+import { organizationAPI } from '@/lib/api'
+import { RequirePermission } from '@/components/auth/PermissionGate'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Member {
   user_id: string
@@ -60,34 +62,56 @@ const Members = () => {
   const navigate = useNavigate()
   const { organization, user } = useAuthStore()
   const { toast } = useToast()
+  const canViewMembers = usePermission('member:view')
+  const canInviteMembers = usePermission('member:invite')
+  const canManageInvitations = usePermission('invitation:view')
+
+
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false)
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [cancelInvitationId, setCancelInvitationId] = useState<string | null>(null)
-  const [stats, setStats] = useState({
-    total: 0,
-    admins: 0,
-    pending: 0
-  })
 
+  // Debounced search effect
+  useEffect(() => {
+    if (!organization?.organization_id) return
+
+    const timeoutId = setTimeout(() => {
+      fetchMembers(searchQuery)
+      if (canManageInvitations) {
+        fetchInvitations(searchQuery)
+      }
+    }, 300) // 300ms debounce
+
+    return () => clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, organization?.organization_id, canManageInvitations])
+
+  // Initial fetch when component mounts
   useEffect(() => {
     if (organization?.organization_id) {
       fetchMembers()
-      fetchInvitations()
+      if (canManageInvitations) {
+        fetchInvitations()
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [organization?.organization_id])
+  }, [organization?.organization_id, canManageInvitations])
 
-  const fetchMembers = async () => {
+  const fetchMembers = async (search = '') => {
     try {
       setLoading(true)
-      const response = await api.get(`/organizations/${organization?.organization_id}/members`)
+      const params = new URLSearchParams()
+      if (search.trim()) {
+        params.append('search', search.trim())
+      }
       
-      if (response.data.success && response.data.data) {
-        setMembers(response.data.data)
-        calculateStats(response.data.data)
+      const response = await organizationAPI.listMembers(organization?.organization_id!)
+      
+      if (response.success && response.data) {
+        setMembers(response.data)
       }
     } catch (err: any) {
       // 401 errors are handled by axios interceptor with redirect
@@ -100,13 +124,17 @@ const Members = () => {
     }
   }
 
-  const fetchInvitations = async () => {
+  const fetchInvitations = async (search = '') => {
     try {
-      const response = await api.get(`/organizations/${organization?.organization_id}/invitations`)
+      const params = new URLSearchParams()
+      if (search.trim()) {
+        params.append('search', search.trim())
+      }
       
-      if (response.data.success && response.data.data) {
-        setInvitations(response.data.data)
-        setStats(prev => ({ ...prev, pending: response.data.data.length }))
+      const response = await organizationAPI.listInvitations(organization?.organization_id!)
+      
+      if (response.success && response.data) {
+        setInvitations(response.data)
       }
     } catch (err: any) {
       // 401 errors are handled by axios interceptor with redirect
@@ -117,20 +145,8 @@ const Members = () => {
     }
   }
 
-  const calculateStats = (membersList: Member[]) => {
-    const admins = membersList.filter(m => 
-      m.role?.toLowerCase() === 'rto' || m.role?.toLowerCase() === 'issuer' || m.role?.toLowerCase() === 'owner' || m.role?.toLowerCase() === 'admin'
-    ).length
-    
-    setStats(prev => ({
-      ...prev,
-      total: membersList.length,
-      admins: admins
-    }))
-  }
-
   const handleInviteSuccess = () => {
-    fetchInvitations()
+    fetchInvitations(searchQuery)
   }
 
   const handleCancelInvitation = async (invitationId: string) => {
@@ -141,10 +157,10 @@ const Members = () => {
     if (!cancelInvitationId) return
 
     try {
-      const response = await api.delete(`/organizations/${organization?.organization_id}/invitations/${cancelInvitationId}`)
+      const response = await organizationAPI.cancelInvitation(organization?.organization_id!, cancelInvitationId)
       
-      if (response.data.success) {
-        fetchInvitations()
+      if (response.success) {
+        fetchInvitations(searchQuery)
         toast({
           title: "Invitation cancelled",
           description: "The invitation has been cancelled successfully.",
@@ -164,9 +180,9 @@ const Members = () => {
 
   const handleResendInvitation = async (invitationId: string) => {
     try {
-      const response = await api.post(`/organizations/${organization?.organization_id}/invitations/${invitationId}/resend`)
+      const response = await organizationAPI.resendInvitation(organization?.organization_id!, invitationId)
       
-      if (response.data.success) {
+      if (response.success) {
         toast({
           title: "Invitation resent",
           description: "The invitation has been resent successfully.",
@@ -217,15 +233,29 @@ const Members = () => {
     navigate('/dashboard')
   }
 
-  const filteredMembers = members.filter(member => 
-    member.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    member.first_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    member.last_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Server-side search - no need for client-side filtering
+  const filteredMembers = members
+  const filteredInvitations = invitations
 
-  const filteredInvitations = invitations.filter(invitation =>
-    invitation.email.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Check if user has permission to view members
+  if (!canViewMembers) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Users className="mx-auto h-16 w-16 text-gray-400 mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
+          <p className="text-gray-600">You don't have permission to view team members.</p>
+          <Button
+            onClick={() => navigate('/dashboard')}
+            className="mt-4"
+            variant="outline"
+          >
+            Back to Dashboard
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/20">
@@ -239,7 +269,7 @@ const Members = () => {
       {/* Header */}
       <header className="relative bg-white/80 backdrop-blur-xl border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center h-16">
             <Button
               variant="ghost"
               size="sm"
@@ -249,17 +279,21 @@ const Members = () => {
               <ArrowLeft className="h-4 w-4" />
               <span>Back</span>
             </Button>
-            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent flex-1 text-center">
               Team Members
             </h1>
-            <Button
-              size="sm"
-              onClick={() => setIsInviteModalOpen(true)}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
-            >
-              <UserPlus className="h-4 w-4 mr-2" />
-              Invite Member
-            </Button>
+            <div className="w-auto">
+              <RequirePermission permission="member:invite">
+                <Button
+                  size="sm"
+                  onClick={() => setIsInviteModalOpen(true)}
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+                >
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  Invite Member
+                </Button>
+              </RequirePermission>
+            </div>
           </div>
         </div>
       </header>
@@ -272,51 +306,6 @@ const Members = () => {
           transition={{ duration: 0.5 }}
           className="space-y-6"
         >
-          {/* Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-blue-100/50">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-blue-600">Total Members</p>
-                    <p className="text-3xl font-bold text-blue-900 mt-1">{stats.total}</p>
-                  </div>
-                  <div className="p-3 bg-blue-600 rounded-xl">
-                    <Users className="h-6 w-6 text-white" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-purple-100/50">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-purple-600">Issuers & RTOs</p>
-                    <p className="text-3xl font-bold text-purple-900 mt-1">{stats.admins}</p>
-                  </div>
-                  <div className="p-3 bg-purple-600 rounded-xl">
-                    <Shield className="h-6 w-6 text-white" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-amber-50 to-amber-100/50">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-amber-600">Pending Invites</p>
-                    <p className="text-3xl font-bold text-amber-900 mt-1">{stats.pending}</p>
-                  </div>
-                  <div className="p-3 bg-amber-600 rounded-xl">
-                    <Mail className="h-6 w-6 text-white" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
           {/* Members List */}
           <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
             <CardHeader>
@@ -397,22 +386,25 @@ const Members = () => {
                         >
                           {member.status}
                         </Badge>
-                        <Button variant="ghost" size="sm">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
+                        <RequirePermission permission="member:update">
+                          <Button variant="ghost" size="sm">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </RequirePermission>
                       </div>
                     </motion.div>
                   ))}
 
                   {/* Pending Invitations */}
-                  {filteredInvitations.length > 0 && (
-                    <>
-                      <div className="pt-6 mt-6 border-t border-gray-200">
-                        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                          <UserPlus className="h-5 w-5 text-purple-600" />
-                          Pending Invitations
-                        </h3>
-                      </div>
+                  <RequirePermission permission="invitation:view">
+                    {filteredInvitations.length > 0 && (
+                      <>
+                        <div className="pt-6 mt-6 border-t border-gray-200">
+                          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                            <UserPlus className="h-5 w-5 text-purple-600" />
+                            Pending Invitations
+                          </h3>
+                        </div>
                       {filteredInvitations.map((invitation) => (
                         <motion.div
                           key={invitation.id}
@@ -444,29 +436,34 @@ const Members = () => {
 
                           <div className="flex items-center gap-3">
                             {getRoleBadge(invitation.role)}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleResendInvitation(invitation.id)}
-                              className="border-blue-200 text-blue-600 hover:bg-blue-50"
-                            >
-                              <RotateCw className="h-4 w-4 mr-1" />
-                              Resend
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleCancelInvitation(invitation.id)}
-                              className="border-red-200 text-red-600 hover:bg-red-50"
-                            >
-                              <X className="h-4 w-4 mr-1" />
-                              Cancel
-                            </Button>
+                            <RequirePermission permission="invitation:resend">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleResendInvitation(invitation.id)}
+                                className="border-blue-200 text-blue-600 hover:bg-blue-50"
+                              >
+                                <RotateCw className="h-4 w-4 mr-1" />
+                                Resend
+                              </Button>
+                            </RequirePermission>
+                            <RequirePermission permission="invitation:cancel">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCancelInvitation(invitation.id)}
+                                className="border-red-200 text-red-600 hover:bg-red-50"
+                              >
+                                <X className="h-4 w-4 mr-1" />
+                                Cancel
+                              </Button>
+                            </RequirePermission>
                           </div>
                         </motion.div>
                       ))}
                     </>
                   )}
+                  </RequirePermission>
                 </div>
               )}
             </CardContent>
@@ -475,11 +472,13 @@ const Members = () => {
       </main>
 
       {/* Invite Modal */}
-      <InviteMemberModal
-        isOpen={isInviteModalOpen}
-        onClose={() => setIsInviteModalOpen(false)}
-        onSuccess={handleInviteSuccess}
-      />
+      {canInviteMembers && (
+        <InviteMemberModal
+          isOpen={isInviteModalOpen}
+          onClose={() => setIsInviteModalOpen(false)}
+          onSuccess={handleInviteSuccess}
+        />
+      )}
 
       {/* Cancel Invitation Confirmation Dialog */}
       <AlertDialog open={!!cancelInvitationId} onOpenChange={() => setCancelInvitationId(null)}>

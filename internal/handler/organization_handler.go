@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"auth-service/internal/service"
 )
@@ -192,8 +193,9 @@ func (h *OrganizationHandler) AcceptInvitation(c *gin.Context) {
 // ListOrganizationMembers handles listing organization members
 func (h *OrganizationHandler) ListOrganizationMembers(c *gin.Context) {
 	orgID := c.Param("orgId")
+	search := c.Query("search") // Get search parameter
 
-	response, err := h.authService.OrganizationService().ListMembers(c.Request.Context(), orgID)
+	response, err := h.authService.OrganizationService().ListMembers(c.Request.Context(), orgID, search)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -261,8 +263,9 @@ func (h *OrganizationHandler) RemoveMember(c *gin.Context) {
 // GetOrganizationInvitations handles getting pending invitations for an organization
 func (h *OrganizationHandler) GetOrganizationInvitations(c *gin.Context) {
 	orgID := c.Param("orgId")
+	search := c.Query("search") // Get search parameter
 
-	response, err := h.authService.OrganizationService().ListPendingInvitations(c.Request.Context(), orgID)
+	response, err := h.authService.OrganizationService().ListPendingInvitations(c.Request.Context(), orgID, search)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -322,5 +325,57 @@ func (h *OrganizationHandler) GetInvitationDetails(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"success": false,
 		"message": "GetInvitationDetails not yet implemented",
+	})
+}
+
+// GetOrganizationRoles handles getting roles for an organization
+// Filtering logic:
+// - Superadmin: sees all roles (system + custom)
+// - Organization admin: sees ONLY custom org roles (IsSystem=false)
+func (h *OrganizationHandler) GetOrganizationRoles(c *gin.Context) {
+	orgID := c.Param("orgId")
+
+	orgUUID, err := uuid.Parse(orgID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid organization ID",
+		})
+		return
+	}
+
+	// Check if user is superadmin
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+
+	// Get all roles for the organization
+	allRoles, err := h.authService.RoleService().GetRolesByOrganization(c.Request.Context(), orgUUID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Filter roles based on user type
+	var response interface{}
+	if isSuperadmin {
+		// Superadmin sees ALL roles (no filtering)
+		response = allRoles
+	} else {
+		// Organization admin: filter out system roles (IsSystem=true)
+		// Only show custom org roles (IsSystem=false)
+		filteredRoles := make([]*service.RoleResponse, 0)
+		for _, role := range allRoles {
+			if !role.IsSystem {
+				filteredRoles = append(filteredRoles, role)
+			}
+		}
+		response = filteredRoles
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    response,
 	})
 }

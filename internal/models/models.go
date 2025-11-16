@@ -10,20 +10,22 @@ import (
 
 // User represents a user in the system - GLOBAL USER (not organization-bound)
 type User struct {
-	ID              uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	Email           string     `json:"email" gorm:"uniqueIndex;not null"` // Global unique email
-	EmailVerifiedAt *time.Time `json:"email_verified_at" gorm:"default:null"`
-	PasswordHash    string     `json:"-" gorm:"not null"` // Never expose in JSON
-	Firstname       *string    `json:"firstname" gorm:"size:100"`
-	Lastname        *string    `json:"lastname" gorm:"size:100"`
-	Address         *string    `json:"address" gorm:"type:text"`
-	Phone           *string    `json:"phone" gorm:"size:20"`
-	IsSuperadmin    bool       `json:"is_superadmin" gorm:"default:false"`                    // Global platform admin
-	GlobalRole      string     `json:"global_role" gorm:"default:'user'"`                     // user, admin
-	Status          string     `json:"status" gorm:"index:idx_users_status;default:'active'"` // active, suspended, deactivated
-	LastLoginAt     *time.Time `json:"last_login_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                         uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	Email                      string     `json:"email" gorm:"uniqueIndex;not null"` // Global unique email
+	EmailVerifiedAt            *time.Time `json:"email_verified_at" gorm:"default:null"`
+	EmailVerificationToken     *string    `json:"-" gorm:"size:255"` // Never expose in JSON
+	EmailVerificationExpiresAt *time.Time `json:"-"`                 // Never expose in JSON
+	PasswordHash               string     `json:"-" gorm:"not null"` // Never expose in JSON
+	Firstname                  *string    `json:"firstname" gorm:"size:100"`
+	Lastname                   *string    `json:"lastname" gorm:"size:100"`
+	Address                    *string    `json:"address" gorm:"type:text"`
+	Phone                      *string    `json:"phone" gorm:"size:20"`
+	IsSuperadmin               bool       `json:"is_superadmin" gorm:"default:false"`                    // Global platform admin
+	GlobalRole                 string     `json:"global_role" gorm:"default:'user'"`                     // user, admin
+	Status                     string     `json:"status" gorm:"index:idx_users_status;default:'active'"` // active, suspended, deactivated
+	LastLoginAt                *time.Time `json:"last_login_at"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
 
 	// Relations
 	Organizations []*Organization `json:"organizations,omitempty" gorm:"many2many:organization_memberships;"`

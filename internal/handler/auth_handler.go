@@ -379,3 +379,68 @@ func (h *AuthHandler) HealthCheck(c *gin.Context) {
 		"data":    response,
 	})
 }
+
+// VerifyEmail handles email verification with 6-digit code
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+		Code  string `json:"code" binding:"required,len=6"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid request data",
+			"errors":  err.Error(),
+		})
+		return
+	}
+
+	if err := h.authService.UserService().VerifyEmail(c.Request.Context(), req.Email, req.Code); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Email verified successfully. You can now log in.",
+	})
+}
+
+// ResendVerificationEmail handles resending verification code with rate limiting
+func (h *AuthHandler) ResendVerificationEmail(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid request data",
+			"errors":  err.Error(),
+		})
+		return
+	}
+
+	if err := h.authService.UserService().ResendVerificationEmail(c.Request.Context(), req.Email); err != nil {
+		// Return 429 for rate limit errors, 400 for others
+		statusCode := http.StatusBadRequest
+		if err.Error() == "please wait before requesting another verification code" {
+			statusCode = http.StatusTooManyRequests
+		}
+
+		c.JSON(statusCode, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Verification code sent successfully. Please check your email.",
+	})
+}

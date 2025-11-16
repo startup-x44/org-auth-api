@@ -14,6 +14,7 @@ import (
 type Service interface {
 	SendPasswordResetEmail(toEmail, resetToken string) error
 	SendInvitationEmail(toEmail, inviterName, organizationName, invitationToken string) error
+	SendVerificationEmail(toEmail, verificationToken string) error
 }
 
 // service implements Service interface
@@ -58,6 +59,22 @@ func (s *service) SendInvitationEmail(toEmail, inviterName, organizationName, in
 	invitationURL := fmt.Sprintf("%s/accept-invitation?token=%s&email=%s", s.config.FrontendURL, invitationToken, encodedEmail)
 	subject := fmt.Sprintf("You've been invited to join %s", organizationName)
 	htmlContent, err := s.generateInvitationEmailHTML(inviterName, organizationName, invitationURL)
+	if err != nil {
+		return fmt.Errorf("failed to generate email content: %w", err)
+	}
+
+	return s.sendEmail(toEmail, subject, htmlContent)
+}
+
+// SendVerificationEmail sends an email verification email with 6-digit code
+func (s *service) SendVerificationEmail(toEmail, verificationCode string) error {
+	if !s.config.Enabled {
+		fmt.Printf("[DEV MODE] 📧 Verification email to %s with code %s\n", toEmail, verificationCode)
+		return nil
+	}
+
+	subject := "Verify Your Email Address"
+	htmlContent, err := s.generateVerificationEmailHTML(verificationCode)
 	if err != nil {
 		return fmt.Errorf("failed to generate email content: %w", err)
 	}
@@ -188,6 +205,68 @@ func (s *service) generateInvitationEmailHTML(inviterName, organizationName, inv
 		InviterName:      inviterName,
 		OrganizationName: organizationName,
 		InvitationURL:    invitationURL,
+		FromName:         s.config.FromName,
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// generateVerificationEmailHTML generates HTML content for email verification with 6-digit code
+func (s *service) generateVerificationEmailHTML(verificationCode string) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Verify Your Email</title>
+</head>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center; border-radius: 8px 8px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 28px;">Verify Your Email</h1>
+    </div>
+    <div style="background: white; padding: 40px; border-radius: 0 0 8px 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <p style="font-size: 16px; color: #374151; line-height: 1.6;">Thank you for registering!</p>
+        <p style="font-size: 16px; color: #374151; line-height: 1.6;">
+            To complete your registration, please enter the verification code below:
+        </p>
+        <div style="text-align: center; margin: 40px 0;">
+            <div style="background: #f3f4f6; border: 2px dashed #10b981; border-radius: 8px; padding: 24px; display: inline-block;">
+                <div style="font-size: 14px; color: #6b7280; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Your Verification Code</div>
+                <div style="font-size: 36px; font-weight: bold; color: #059669; letter-spacing: 8px; font-family: 'Courier New', monospace;">{{.VerificationCode}}</div>
+            </div>
+        </div>
+        <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
+            This code will expire in <strong>15 minutes</strong> for security reasons.
+        </p>
+        <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
+            If you didn't create an account, you can safely ignore this email.
+        </p>
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+        <p style="font-size: 12px; color: #9ca3af;">
+            <strong>Security Tip:</strong> Never share this code with anyone. Our team will never ask for your verification code.
+        </p>
+    </div>
+    <div style="text-align: center; margin-top: 20px; color: #9ca3af; font-size: 12px;">
+        <p>This email was sent by {{.FromName}}</p>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("verificationEmail").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	data := struct {
+		VerificationCode string
+		FromName         string
+	}{
+		VerificationCode: verificationCode,
 		FromName:         s.config.FromName,
 	}
 

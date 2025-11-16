@@ -28,9 +28,11 @@ export function usePermission(permission: string): boolean {
  */
 export function useAnyPermission(...permissions: string[]): boolean {
   const hasAnyPermission = useAuthStore(state => state.hasAnyPermission)
+  const userPermissions = useAuthStore(state => state.permissions)
   return useMemo(
     () => hasAnyPermission(...permissions),
-    [hasAnyPermission, ...permissions]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasAnyPermission, userPermissions, ...permissions]
   )
 }
 
@@ -42,9 +44,11 @@ export function useAnyPermission(...permissions: string[]): boolean {
  */
 export function useAllPermissions(...permissions: string[]): boolean {
   const hasAllPermissions = useAuthStore(state => state.hasAllPermissions)
+  const userPermissions = useAuthStore(state => state.permissions)
   return useMemo(
     () => hasAllPermissions(...permissions),
-    [hasAllPermissions, ...permissions]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasAllPermissions, userPermissions, ...permissions]
   )
 }
 

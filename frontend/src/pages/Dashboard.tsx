@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import useAuthStore from '@/store/auth'
+import { RequirePermission } from '@/components/auth/PermissionGate'
 
 const Dashboard = () => {
   const navigate = useNavigate()
@@ -276,30 +277,59 @@ const Dashboard = () => {
                 </Card>
               </motion.div>
 
-              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                <Card className="cursor-pointer hover:shadow-xl transition-all duration-300 border-0 bg-white/80 backdrop-blur">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-gray-900">
-                      <div className="p-2 bg-green-100 rounded-lg">
-                        <Users className="h-5 w-5 text-green-600" />
-                      </div>
-                      <span>Team Members</span>
-                    </CardTitle>
-                    <CardDescription>
-                      Manage team members and invitations
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Button
-                      onClick={() => navigate('/members')}
-                      className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800"
-                    >
-                      View Members
-                      <ArrowUpRight className="h-4 w-4 ml-2" />
-                    </Button>
-                  </CardContent>
-                </Card>
-              </motion.div>
+              <RequirePermission permission="member:view">
+                <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                  <Card className="cursor-pointer hover:shadow-xl transition-all duration-300 border-0 bg-white/80 backdrop-blur">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-gray-900">
+                        <div className="p-2 bg-green-100 rounded-lg">
+                          <Users className="h-5 w-5 text-green-600" />
+                        </div>
+                        <span>Team Members</span>
+                      </CardTitle>
+                      <CardDescription>
+                        Manage team members and invitations
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        onClick={() => navigate('/members')}
+                        className="w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800"
+                      >
+                        View Members
+                        <ArrowUpRight className="h-4 w-4 ml-2" />
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              </RequirePermission>
+
+              <RequirePermission permission="role:view">
+                <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                  <Card className="cursor-pointer hover:shadow-xl transition-all duration-300 border-0 bg-white/80 backdrop-blur">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-gray-900">
+                        <div className="p-2 bg-indigo-100 rounded-lg">
+                          <Shield className="h-5 w-5 text-indigo-600" />
+                        </div>
+                        <span>Roles & Permissions</span>
+                      </CardTitle>
+                      <CardDescription>
+                        Manage custom roles and access control
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        onClick={() => navigate('/roles')}
+                        className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800"
+                      >
+                        Manage Roles
+                        <ArrowUpRight className="h-4 w-4 ml-2" />
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              </RequirePermission>
 
               <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
                 <Card className="cursor-pointer hover:shadow-xl transition-all duration-300 border-0 bg-white/80 backdrop-blur">

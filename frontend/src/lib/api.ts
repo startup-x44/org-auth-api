@@ -1,4 +1,4 @@
-import api from './axios-instance'
+import api, { publicAPI } from './axios-instance'
 import {
   LoginRequest,
   LoginResponse,
@@ -20,13 +20,13 @@ import {
   OrganizationMembership
 } from './types'
 
-// Auth API functions
+// Auth API functions (use publicAPI for unauthenticated routes)
 export const authAPI = {
   login: (data: LoginRequest): Promise<LoginResponse> =>
-    api.post('/auth/login-global', data).then(res => res.data),
+    publicAPI.post('/auth/login', data).then(res => res.data),
 
   register: (data: RegisterRequest): Promise<RegisterResponse> =>
-    api.post('/auth/register-global', data).then(res => res.data),
+    publicAPI.post('/auth/register', data).then(res => res.data),
 
   selectOrganization: (data: SelectOrganizationRequest): Promise<SelectOrganizationResponse> =>
     api.post('/auth/select-organization', data).then(res => res.data),
@@ -41,10 +41,13 @@ export const authAPI = {
     api.post('/user/logout').then(res => res.data),
 
   forgotPassword: (data: ForgotPasswordRequest): Promise<ApiSuccess> =>
-    api.post('/auth/forgot-password', data).then(res => res.data),
+    publicAPI.post('/auth/forgot-password', data).then(res => res.data),
 
   resetPassword: (data: ResetPasswordRequest): Promise<ApiSuccess> =>
-    api.post('/auth/reset-password', data).then(res => res.data),
+    publicAPI.post('/auth/reset-password', data).then(res => res.data),
+
+  acceptInvitation: (token: string): Promise<ApiSuccess> =>
+    api.post(`/invitations/${token}/accept`).then(res => res.data),
 }
 
 // User API functions
@@ -78,6 +81,58 @@ export const organizationAPI = {
 
   deleteOrganization: (orgId: string): Promise<ApiSuccess> =>
     api.delete(`/organizations/${orgId}`).then(res => res.data),
+
+  // Members
+  listMembers: (orgId: string): Promise<ApiSuccess<any[]>> =>
+    api.get(`/organizations/${orgId}/members`).then(res => res.data),
+
+  inviteUser: (orgId: string, data: { email: string; role?: string }): Promise<ApiSuccess> =>
+    api.post(`/organizations/${orgId}/members`, data).then(res => res.data),
+
+  updateMember: (orgId: string, userId: string, data: { role?: string }): Promise<ApiSuccess> =>
+    api.put(`/organizations/${orgId}/members/${userId}`, data).then(res => res.data),
+
+  removeMember: (orgId: string, userId: string): Promise<ApiSuccess> =>
+    api.delete(`/organizations/${orgId}/members/${userId}`).then(res => res.data),
+
+  // Roles
+  getRoles: (orgId: string): Promise<ApiSuccess<any[]>> =>
+    api.get(`/organizations/${orgId}/roles`).then(res => res.data),
+
+  createRole: (orgId: string, data: { name: string; permissions: string[] }): Promise<ApiSuccess> =>
+    api.post(`/organizations/${orgId}/roles`, data).then(res => res.data),
+
+  getRole: (orgId: string, roleId: string): Promise<ApiSuccess<any>> =>
+    api.get(`/organizations/${orgId}/roles/${roleId}`).then(res => res.data),
+
+  updateRole: (orgId: string, roleId: string, data: { name?: string; permissions?: string[] }): Promise<ApiSuccess> =>
+    api.put(`/organizations/${orgId}/roles/${roleId}`, data).then(res => res.data),
+
+  deleteRole: (orgId: string, roleId: string): Promise<ApiSuccess> =>
+    api.delete(`/organizations/${orgId}/roles/${roleId}`).then(res => res.data),
+  
+  // Permissions
+  getPermissions: (orgId: string): Promise<ApiSuccess<any[]>> =>
+    api.get(`/organizations/${orgId}/permissions`).then(res => res.data),
+
+  createPermission: (orgId: string, data: { name: string; description?: string }): Promise<ApiSuccess> =>
+    api.post(`/organizations/${orgId}/permissions`, data).then(res => res.data),
+
+  updatePermission: (orgId: string, permissionId: string, data: { name?: string; description?: string }): Promise<ApiSuccess> =>
+    api.put(`/organizations/${orgId}/permissions/${permissionId}`, data).then(res => res.data),
+
+  deletePermission: (orgId: string, permissionId: string): Promise<ApiSuccess> =>
+    api.delete(`/organizations/${orgId}/permissions/${permissionId}`).then(res => res.data),
+
+  // Invitations
+  listInvitations: (orgId: string): Promise<ApiSuccess<any[]>> =>
+    api.get(`/organizations/${orgId}/invitations`).then(res => res.data),
+
+  resendInvitation: (orgId: string, invitationId: string): Promise<ApiSuccess> =>
+    api.post(`/organizations/${orgId}/invitations/${invitationId}/resend`).then(res => res.data),
+
+  cancelInvitation: (orgId: string, invitationId: string): Promise<ApiSuccess> =>
+    api.delete(`/organizations/${orgId}/invitations/${invitationId}`).then(res => res.data),
 }
 
 // Admin API functions

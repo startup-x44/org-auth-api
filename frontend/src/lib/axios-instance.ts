@@ -1,26 +1,27 @@
 import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
-// Create axios instance with base configuration
-const api: AxiosInstance = axios.create({
-  baseURL: `${process.env.REACT_APP_API_URL || 'http://localhost:8080'}/api/v1`,
+const baseURL = `${import.meta.env.VITE_API_URL || 'http://localhost:8080'}/api/v1`
+
+// Public API instance (no auth, no interceptors for redirects)
+export const publicAPI: AxiosInstance = axios.create({
+  baseURL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true, // Enable cookies for CSRF
+  withCredentials: true,
 })
 
 // Function to get CSRF token
 const getCSRFToken = async (): Promise<string | null> => {
   try {
-    const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080'
+    const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
     const response: AxiosResponse = await axios.get(`${baseURL}/health`, {
       withCredentials: true,
       headers: {
         'Accept': 'application/json',
       }
     })
-    // Axios normalizes headers to lowercase
     const token = response.headers['x-csrf-token']
     return token || null
   } catch (error) {
@@ -28,6 +29,46 @@ const getCSRFToken = async (): Promise<string | null> => {
     return null
   }
 }
+
+// Add CSRF to public API
+publicAPI.interceptors.request.use(
+  async (config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> => {
+    console.log('🟢 publicAPI REQUEST:', config.url)
+    if (config.method && ['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
+      const csrfToken = await getCSRFToken()
+      if (csrfToken) {
+        config.headers['X-CSRF-Token'] = csrfToken
+      }
+    }
+    return config
+  },
+  (error) => {
+    console.log('🔴 publicAPI REQUEST ERROR:', error)
+    return Promise.reject(error)
+  }
+)
+
+// Add response interceptor to public API for debugging
+publicAPI.interceptors.response.use(
+  (response: AxiosResponse) => {
+    console.log('🟢 publicAPI RESPONSE:', response.status, response.config.url)
+    return response
+  },
+  (error) => {
+    console.log('🔴 publicAPI RESPONSE ERROR:', error.response?.status, error.config?.url, error.message)
+    return Promise.reject(error)
+  }
+)
+
+// Authenticated API instance (with auth token and interceptors)
+const api: AxiosInstance = axios.create({
+  baseURL,
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  withCredentials: true,
+})
 
 // Request interceptor to add auth token and CSRF token
 api.interceptors.request.use(
@@ -61,16 +102,6 @@ api.interceptors.request.use(
       }
     }
 
-    // Debug log for create-organization requests
-    if (config.url?.includes('create-organization')) {
-      console.log('Axios interceptor - create-organization request:', {
-        url: config.url,
-        method: config.method,
-        data: config.data,
-        headers: config.headers
-      })
-    }
-
     return config
   },
   (error) => {
@@ -88,9 +119,8 @@ api.interceptors.response.use(
 
     // Handle 401 errors
     if (error.response?.status === 401) {
-      // If already retried or no refresh token available, redirect to login
+      // If already retried, redirect to login
       if (originalRequest._retry) {
-        // Already tried refresh, clear everything and redirect
         localStorage.clear()
         window.location.href = '/login'
         return Promise.reject(error)
@@ -103,7 +133,6 @@ api.interceptors.response.use(
         const organizationId = localStorage.getItem('organization_id')
         let refreshToken = null
         
-        // Get org-specific refresh token first, fallback to global
         if (organizationId) {
           refreshToken = localStorage.getItem(`refresh_token_${organizationId}`)
         }
@@ -112,7 +141,7 @@ api.interceptors.response.use(
         }
         
         if (refreshToken) {
-          const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080'
+          const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
           const response: AxiosResponse = await axios.post(
             `${baseURL}/api/v1/auth/refresh`,
             { refresh_token: refreshToken }
@@ -120,7 +149,6 @@ api.interceptors.response.use(
 
           const { access_token, refresh_token: new_refresh_token } = response.data.data.token
 
-          // Store tokens with org-specific keys
           if (organizationId) {
             localStorage.setItem(`access_token_${organizationId}`, access_token)
             localStorage.setItem(`refresh_token_${organizationId}`, new_refresh_token)
@@ -132,13 +160,11 @@ api.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${access_token}`
           return api(originalRequest)
         } else {
-          // No refresh token, clear storage and redirect to login
           localStorage.clear()
           window.location.href = '/login'
           return Promise.reject(error)
         }
       } catch (refreshError) {
-        // Refresh failed, clear everything and redirect to login
         localStorage.clear()
         window.location.href = '/login'
         return Promise.reject(refreshError)

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { authAPI, userAPI } from '../lib/api'
 import { AuthState, User, RegisterRequest, UpdateProfileRequest, ChangePasswordRequest } from '../lib/types'
-import { decodeJWT, extractPermissions, isTokenExpired } from '../lib/jwt'
+import { decodeJWT } from '../lib/jwt'
 
 interface AuthStore extends AuthState {
   // Actions
@@ -63,7 +63,9 @@ const useAuthStore = create<AuthStore>()(
 
       login: async (email: string, password: string) => {
         try {
-          set({ loading: true, error: null })
+          // REMOVED: set({ loading: true, error: null }) to prevent Zustand persist triggers
+          console.log('🟢 auth.login() called - NOT updating Zustand state to avoid component remount')
+          
           const response = await authAPI.login({ email, password })
           
           console.log('Login API response (full):', response) // Debug log
@@ -79,35 +81,35 @@ const useAuthStore = create<AuthStore>()(
 
           if (!user) {
             console.error('No user in response! Response structure:', response)
-            throw new Error('Invalid login response - no user data')
+            const errorMessage = 'Invalid login response - no user data'
+            // Only set error state, not loading state
+            set({ error: errorMessage })
+            return { success: false, message: errorMessage }
           }
 
-          // Store user globally
+          // Store user globally (but don't update Zustand state yet to avoid re-render)
           console.log('Storing user in localStorage:', user)
           localStorage.setItem('user_global', JSON.stringify(user))
+          localStorage.setItem('organizations_temp', JSON.stringify(organizations || []))
           
-          set({
-            user,
-            organizations: organizations || [],
-            loading: false,
-            error: null,
-          })
+          // REMOVED: Don't update loading state here to prevent Zustand persist triggers
+          // Component now manages its own loading state
+          console.log('🟢 Login successful - returning result without updating Zustand state')
 
-          console.log('User stored in Zustand state:', user)
           console.log('Organizations after login:', organizations) // Debug log
 
           // Check if user has organizations
           if (organizations && organizations.length > 0) {
-            set({ needsOrgSelection: true })
-            return { success: true, needsOrgSelection: true, organizations }
+            return { success: true, needsOrgSelection: true, organizations, user }
           }
 
           // No organizations - user needs to create one
-          return { success: true, needsOrgSelection: false, organizations: [] }
+          return { success: true, needsOrgSelection: false, organizations: [], user }
         } catch (error: any) {
           console.error('Login error:', error) // Debug log
           const errorMessage = error.response?.data?.message || error.message || 'Login failed'
-          set({ loading: false, error: errorMessage })
+          // Only set error state, not loading state
+          set({ error: errorMessage })
           return { success: false, message: errorMessage }
         }
       },
@@ -118,7 +120,9 @@ const useAuthStore = create<AuthStore>()(
           const { user } = get()
           
           if (!user?.id) {
-            throw new Error('User not authenticated')
+            const errorMessage = 'User not authenticated'
+            set({ loading: false, error: errorMessage })
+            return { success: false, message: errorMessage }
           }
           
           const response = await authAPI.selectOrganization({
@@ -128,12 +132,19 @@ const useAuthStore = create<AuthStore>()(
           
           console.log('Select organization response:', response)
           
-          // Backend might return { data: { token, organization } } or { token, organization }
-          const responseData: any = response
-          const { token, organization } = responseData.data || responseData
+          // Backend returns { success: true, data: { token, organization } }
+          // After .then(res => res.data), we get the full response body
+          const token = (response as any).data?.token
+          const organization = (response as any).data?.organization
+
+          console.log('Extracted token:', token)
+          console.log('Extracted organization:', organization)
 
           if (!token || !organization) {
-            throw new Error('Invalid response from server')
+            console.error('Invalid response structure:', response)
+            const errorMessage = 'Invalid response from server'
+            set({ loading: false, error: errorMessage })
+            return { success: false, message: errorMessage }
           }
 
           // Decode JWT to extract permissions
@@ -183,15 +194,21 @@ const useAuthStore = create<AuthStore>()(
           if (!user) {
             const userGlobal = localStorage.getItem('user_global')
             console.log('user_global from localStorage (raw):', userGlobal)
-            if (userGlobal) {
-              user = JSON.parse(userGlobal)
-              console.log('Retrieved user from localStorage:', user)
+            if (userGlobal && userGlobal !== 'undefined') {
+              try {
+                user = JSON.parse(userGlobal)
+                console.log('Retrieved user from localStorage:', user)
+              } catch (e) {
+                console.error('Failed to parse user_global:', e)
+              }
             }
           }
           
           if (!user?.id) {
             console.error('User not authenticated! User object:', user)
-            throw new Error('User not authenticated')
+            const errorMessage = 'User not authenticated'
+            set({ loading: false, error: errorMessage })
+            return { success: false, message: errorMessage }
           }
           
           const payload = {
@@ -204,14 +221,21 @@ const useAuthStore = create<AuthStore>()(
           
           const response = await authAPI.createOrganization(payload)
           
-          console.log('Create organization response:', response)
+          console.log('Create organization response (full):', response)
           
-          // Backend might return { data: { token, organization } } or { token, organization }
-          const responseData: any = response
-          const { token, organization } = responseData.data || responseData
+          // Backend returns { success: true, data: { organization, token } }
+          // authAPI.createOrganization does .then(res => res.data), so response = { success, data: {...} }
+          const { data } = response as any
+          const { token, organization } = data || {}
+          
+          console.log('Extracted token:', token)
+          console.log('Extracted organization:', organization)
 
           if (!token || !organization) {
-            throw new Error('Invalid response from server')
+            console.error('Invalid response structure. Full response:', response)
+            const errorMessage = 'Invalid response from server - missing token or organization'
+            set({ loading: false, error: errorMessage })
+            return { success: false, message: errorMessage }
           }
 
           // Decode JWT to extract permissions
@@ -227,19 +251,21 @@ const useAuthStore = create<AuthStore>()(
           localStorage.setItem(`organization_${organization.id}`, JSON.stringify(organization))
           localStorage.setItem('organization_id', organization.id)
 
-          set({
+          set((state) => ({
+            ...state,
             user,
             accessToken: token.access_token,
             refreshToken: token.refresh_token,
             organizationId: organization.id,
             organization,
+            organizations: [...(state.organizations || []), organization], // Add new organization to list
             permissions,
             roleId,
             roleName,
             isAuthenticated: true,
             needsOrgSelection: false,
             loading: false,
-          })
+          }))
 
           return { success: true }
         } catch (error: any) {
@@ -332,6 +358,9 @@ const useAuthStore = create<AuthStore>()(
           localStorage.removeItem('user')
           localStorage.removeItem('tenant_id')
           
+          // Clear Zustand persist storage
+          localStorage.removeItem('auth-storage')
+          
           set({
             user: null,
             accessToken: null,
@@ -354,7 +383,11 @@ const useAuthStore = create<AuthStore>()(
       performTokenRefresh: async () => {
         try {
           const { refreshToken } = get()
-          if (!refreshToken) throw new Error('No refresh token')
+          if (!refreshToken) {
+            console.error('No refresh token available')
+            get().logout()
+            return { success: false }
+          }
 
           const response = await authAPI.refreshToken({ refresh_token: refreshToken })
           const { token } = response

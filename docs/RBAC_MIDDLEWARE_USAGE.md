@@ -2,7 +2,81 @@
 
 ## Overview
 
-The auth service now includes **complete RBAC (Role-Based Access Control)** middleware for fine-grained permission enforcement.
+The auth service now includes **complete RBAC (Role-Based Access Control)** middleware for fine-grained permission enforcement with **strict organization isolation security**.
+
+## 🔒 CRITICAL SECURITY REQUIREMENTS
+
+### Organization Isolation 
+**ALL RBAC operations MUST respect organization boundaries**. The system enforces strict isolation to prevent privilege escalation and cross-organization data access.
+
+#### Security Rules:
+1. **System Permissions**: Global permissions (e.g., `user:login`) can be assigned to any role
+2. **Custom Permissions**: Organization-specific permissions can ONLY be assigned to roles within the SAME organization
+3. **Permission Queries**: All permission lookups MUST filter by organization context
+4. **Role Operations**: All role operations MUST validate organization membership
+
+### Deprecated Methods - DO NOT USE
+These methods bypass organization validation and create security vulnerabilities:
+
+```go
+// ❌ DANGEROUS - No organization validation
+service.AssignPermissionsToRole(roleID, permissions)
+service.RevokePermissionsFromRole(roleID, permissions) 
+service.GetRole(roleID)
+service.UpdateRole(roleID, req)
+service.DeleteRole(roleID)
+
+// ✅ SECURE - Organization-aware methods
+service.AssignPermissionsToRoleWithOrganization(roleID, orgID, permissions)
+service.RevokePermissionsFromRoleWithOrganization(roleID, orgID, permissions)
+service.GetRoleWithOrganization(roleID, orgID)
+service.UpdateRoleWithOrganization(roleID, orgID, req)
+service.DeleteRoleWithOrganization(roleID, orgID)
+```
+
+### Secure Development Guidelines
+
+#### 1. Always Use Organization Context
+```go
+// ✅ CORRECT - Organization context included
+membership, err := repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID, userID)
+if err != nil {
+    return fmt.Errorf("user not member of organization")
+}
+
+role, err := repo.Role().GetByIDAndOrganization(ctx, roleID, orgID)
+```
+
+#### 2. Validate Organization Membership
+```go
+// ✅ CORRECT - Validate user belongs to organization before role operations
+func (s *roleService) getUserOrgMembership(ctx context.Context, userID, orgID string) (*models.OrganizationMembership, error) {
+    membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID, userID)
+    if err != nil {
+        return nil, fmt.Errorf("user not found in organization: %w", err)
+    }
+    if membership.Status != models.MembershipStatusActive {
+        return nil, fmt.Errorf("user membership not active")
+    }
+    return membership, nil
+}
+```
+
+#### 3. Repository Layer Security
+The repository layer enforces security constraints:
+
+```go
+// Permission assignment with validation
+func (r *permissionRepository) AssignToRole(ctx context.Context, roleID, permissionID uuid.UUID) error {
+    // Validates that custom permissions can only be assigned within same organization
+    // System permissions can be assigned to any role
+}
+
+// Role permission creation with organization validation  
+func (r *rolePermissionRepository) CreateWithValidation(ctx context.Context, rp *models.RolePermission) error {
+    // Prevents cross-organization privilege escalation
+}
+```
 
 ## Available Middleware
 
@@ -235,3 +309,83 @@ Organization admins can create custom roles:
 ```
 
 Then assign this role to users who need those specific capabilities.
+
+## 🔍 Security Testing
+
+### Required Security Tests
+All RBAC implementations must include tests that verify:
+
+1. **Cross-Organization Permission Assignment Prevention**
+```go
+// Test: Attempt to assign custom permission from org1 to role in org2
+err := repo.Permission().AssignToRole(ctx, role2ID, customPerm1ID)
+assert.Error(t, err) // Should fail with security error
+```
+
+2. **Organization-Filtered Permission Queries**
+```go
+// Test: GetRolePermissions only returns org-scoped permissions
+perms, err := repo.Permission().GetRolePermissions(ctx, roleID)
+for _, perm := range perms {
+    if perm.OrganizationID != nil {
+        assert.Equal(t, expectedOrgID, *perm.OrganizationID)
+    }
+}
+```
+
+3. **Privilege Escalation Prevention**
+```go
+// Test: Direct role permission creation bypassing validation should fail
+invalidRP := &models.RolePermission{
+    RoleID: roleInOrg1,
+    PermissionID: customPermFromOrg2,
+}
+err := repo.RolePermission().CreateWithValidation(ctx, invalidRP)
+assert.Error(t, err) // Should prevent cross-org escalation
+```
+
+### Security Audit Checklist
+
+When implementing RBAC features, verify:
+
+- [ ] All repository methods include organization context
+- [ ] Service layer validates user membership before role operations
+- [ ] Handler layer uses organization-scoped service methods
+- [ ] No direct use of deprecated security-bypassing methods
+- [ ] Permission assignments respect system vs custom permission rules
+- [ ] Tests cover cross-organization attack scenarios
+- [ ] Error messages don't leak organization structure information
+
+## 🚨 Common Security Vulnerabilities
+
+### 1. Missing Organization Validation
+```go
+// ❌ VULNERABLE - No org validation
+role, err := repo.Role().GetByID(ctx, roleID)
+
+// ✅ SECURE - Organization validation
+role, err := repo.Role().GetByIDAndOrganization(ctx, roleID, orgID)
+```
+
+### 2. Cross-Organization Data Leakage
+```go
+// ❌ VULNERABLE - Could return permissions from other orgs
+perms, err := repo.Permission().GetAll(ctx)
+
+// ✅ SECURE - Organization-filtered
+perms, err := repo.Permission().GetByOrganization(ctx, orgID)
+```
+
+### 3. Privilege Escalation Through Service Bypass
+```go
+// ❌ VULNERABLE - Bypasses organization checks
+repo.RolePermission().Create(ctx, &models.RolePermission{
+    RoleID: targetRoleID,
+    PermissionID: adminPermissionID, // Could be from different org
+})
+
+// ✅ SECURE - Validation enforced
+repo.RolePermission().CreateWithValidation(ctx, rolePermission)
+```
+
+Remember: **Organization isolation is the foundation of multi-tenant security**. Every RBAC operation must respect these boundaries.
