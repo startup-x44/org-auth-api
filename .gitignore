@@ -45,3 +45,4 @@ Thumbs.db
 # Docker volumes (optional - uncomment if you want to ignore)
 # postgres_data/
 # redis_data/
+docs/propmts
