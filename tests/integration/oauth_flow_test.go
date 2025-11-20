@@ -1,4 +1,4 @@
-package test
+package integration_test
 
 import (
 	"context"
@@ -95,7 +95,7 @@ func TestOAuthFlow_Integration(t *testing.T) {
 		require.NotEmpty(t, tokenResp.AccessToken)
 		require.NotEmpty(t, tokenResp.RefreshToken)
 		require.Equal(t, "Bearer", tokenResp.TokenType)
-		require.Greater(t, tokenResp.ExpiresIn, 3500) // Should be ~3600 seconds
+		require.Greater(t, tokenResp.ExpiresIn, int64(3500)) // Should be ~3600 seconds
 
 		// Step 6: Attempt to reuse authorization code (should fail)
 		_, err = oauth2Svc.ExchangeCodeForTokens(ctx, tokenReq)
@@ -114,6 +114,20 @@ func TestOAuthFlow_Integration(t *testing.T) {
 		t.Logf("   - Access Token: %s", tokenResp.AccessToken[:20]+"...")
 		t.Logf("   - Refresh Token: %s", tokenResp.RefreshToken[:20]+"...")
 	})
+
+	// Additional test cases could be added here when the service interface is more stable
+}
+
+func TestOAuthFlow_HTTPIntegration(t *testing.T) {
+	// This test would require setting up the full HTTP server
+	// For now, we'll create a simpler version that tests the handler logic
+	t.Skip("HTTP integration test - requires full server setup")
+
+	// TODO: Implement HTTP-level integration test that:
+	// 1. Starts the Gin server
+	// 2. Makes actual HTTP requests to /oauth/authorize
+	// 3. Follows redirects and exchanges codes
+	// 4. Validates JWT tokens
 }
 
 func TestPKCE_Utilities(t *testing.T) {

@@ -1,0 +1,2 @@
+# This file prevents Go from building migration files as part of the main package
+# Migration files are meant to be run individually as standalone executables

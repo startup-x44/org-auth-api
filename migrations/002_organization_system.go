@@ -1,3 +1,4 @@
+//go:build ignore
 // Migration 002: Organization System
 // This migration transforms the auth service from tenant-based to Slack-style multi-organization architecture
 //

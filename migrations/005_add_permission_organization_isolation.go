@@ -1,3 +1,4 @@
+//go:build ignore
 // Migration 005: Permission Organization Isolation
 // This migration adds organization_id to permissions table to enable custom permission isolation
 //
