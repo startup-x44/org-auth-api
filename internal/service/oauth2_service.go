@@ -11,6 +11,7 @@ import (
 
 	"auth-service/internal/models"
 	"auth-service/internal/repository"
+	"auth-service/pkg/hashutil"
 	"auth-service/pkg/jwt"
 	"auth-service/pkg/password"
 	"auth-service/pkg/pkce"
@@ -24,7 +25,7 @@ type OAuth2Service interface {
 	ExchangeCodeForTokens(ctx context.Context, req *TokenRequest) (*TokenResponse, error)
 	GetUserInfo(ctx context.Context, userID uuid.UUID) (*UserInfoResponse, error)
 	RevokeRefreshToken(ctx context.Context, token string) error
-	RefreshAccessToken(ctx context.Context, refreshToken, clientID string) (*TokenResponse, error)
+	RefreshAccessToken(ctx context.Context, refreshToken, clientID, userAgent, ipAddress string) (*TokenResponse, error)
 }
 
 type oauth2Service struct {
@@ -62,6 +63,8 @@ type TokenRequest struct {
 	RedirectURI  string
 	CodeVerifier string
 	GrantType    string
+	UserAgent    string // For token binding
+	IPAddress    string // For token binding
 }
 
 // TokenResponse represents OAuth2 token response
@@ -133,9 +136,15 @@ func (s *oauth2Service) CreateAuthorizationCode(ctx context.Context, req *Author
 	}
 	code := base64.RawURLEncoding.EncodeToString(codeBytes)
 
+	// Hash the code for storage (deterministic HMAC-SHA256)
+	codeHash, err := hashutil.HMACHash(code)
+	if err != nil {
+		return "", fmt.Errorf("failed to hash authorization code: %w", err)
+	}
+
 	// Store authorization code (expires in 10 minutes)
 	authCode := &models.AuthorizationCode{
-		Code:                code,
+		CodeHash:            codeHash,
 		ClientID:            req.ClientID,
 		UserID:              req.UserID,
 		OrganizationID:      req.OrganizationID,
@@ -159,8 +168,14 @@ func (s *oauth2Service) ExchangeCodeForTokens(ctx context.Context, req *TokenReq
 		return nil, errors.New("unsupported grant type")
 	}
 
-	// Get authorization code
-	authCode, err := s.repo.AuthorizationCode().GetByCode(ctx, req.Code)
+	// Hash the incoming code for lookup
+	codeHash, err := hashutil.HMACHash(req.Code)
+	if err != nil {
+		return nil, errors.New("invalid authorization code")
+	}
+
+	// Get authorization code by hash
+	authCode, err := s.repo.AuthorizationCode().GetByCodeHash(ctx, codeHash)
 	if err != nil {
 		return nil, errors.New("invalid or expired authorization code")
 	}
@@ -209,8 +224,8 @@ func (s *oauth2Service) ExchangeCodeForTokens(ctx context.Context, req *TokenReq
 		return nil, errors.New("user not found")
 	}
 
-	// Mark code as used
-	if err := s.repo.AuthorizationCode().MarkAsUsed(ctx, req.Code); err != nil {
+	// Mark code as used (use hash for lookup)
+	if err := s.repo.AuthorizationCode().MarkAsUsed(ctx, codeHash); err != nil {
 		return nil, fmt.Errorf("failed to mark code as used: %w", err)
 	}
 
@@ -220,8 +235,8 @@ func (s *oauth2Service) ExchangeCodeForTokens(ctx context.Context, req *TokenReq
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
 
-	// Generate refresh token
-	refreshToken, err := s.generateRefreshToken(ctx, user.ID, authCode.OrganizationID, req.ClientID, authCode.Scope)
+	// Generate refresh token with binding
+	refreshToken, err := s.generateRefreshToken(ctx, user.ID, authCode.OrganizationID, req.ClientID, authCode.Scope, req.UserAgent, req.IPAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
@@ -263,18 +278,23 @@ func (s *oauth2Service) GetUserInfo(ctx context.Context, userID uuid.UUID) (*Use
 }
 
 func (s *oauth2Service) RevokeRefreshToken(ctx context.Context, token string) error {
-	// Hash token for lookup
-	hashedToken, err := s.pwdService.Hash(token)
+	// Hash token for lookup (deterministic HMAC-SHA256)
+	tokenHash, err := hashutil.HMACHash(token)
 	if err != nil {
 		return fmt.Errorf("failed to hash token: %w", err)
 	}
-	return s.repo.OAuthRefreshToken().Revoke(ctx, hashedToken)
+	return s.repo.OAuthRefreshToken().Revoke(ctx, tokenHash)
 }
 
-func (s *oauth2Service) RefreshAccessToken(ctx context.Context, refreshToken, clientID string) (*TokenResponse, error) {
+func (s *oauth2Service) RefreshAccessToken(ctx context.Context, refreshToken, clientID, userAgent, ipAddress string) (*TokenResponse, error) {
+	// Hash the incoming refresh token for lookup (deterministic HMAC-SHA256)
+	tokenHash, err := hashutil.HMACHash(refreshToken)
+	if err != nil {
+		return nil, errors.New("invalid refresh token")
+	}
+
 	// Get refresh token from database
-	// Note: This requires hashing the refresh token or implementing a different lookup strategy
-	oauthToken, err := s.repo.OAuthRefreshToken().GetByToken(ctx, refreshToken)
+	oauthToken, err := s.repo.OAuthRefreshToken().GetByTokenHash(ctx, tokenHash)
 	if err != nil {
 		return nil, errors.New("invalid refresh token")
 	}
@@ -283,8 +303,33 @@ func (s *oauth2Service) RefreshAccessToken(ctx context.Context, refreshToken, cl
 		return nil, errors.New("refresh token has been revoked")
 	}
 
+	// Check if token has already been used (potential replay attack)
+	if oauthToken.UsedAt != nil {
+		// Token has been used - revoke the entire token family for security
+		_ = s.repo.OAuthRefreshToken().RevokeTokenFamily(ctx, oauthToken.FamilyID)
+		return nil, errors.New("refresh token has already been used - token family revoked for security")
+	}
+
 	if oauthToken.ClientID != clientID {
 		return nil, errors.New("client ID mismatch")
+	}
+
+	// Verify token binding (user agent and IP)
+	userAgentHash := hashutil.SHA256Hash(userAgent)
+	ipHash := hashutil.SHA256Hash(ipAddress)
+
+	if oauthToken.UserAgentHash != userAgentHash {
+		// User agent mismatch - potential token theft
+		_ = s.repo.OAuthRefreshToken().RevokeTokenFamily(ctx, oauthToken.FamilyID)
+		return nil, errors.New("token binding violation - user agent mismatch")
+	}
+
+	if oauthToken.IPHash != ipHash {
+		// IP address mismatch - potential token theft
+		// Note: In production, you might want to be more lenient with IP changes
+		// (e.g., allow rotation within same /24 subnet, or log warning instead of rejecting)
+		_ = s.repo.OAuthRefreshToken().RevokeTokenFamily(ctx, oauthToken.FamilyID)
+		return nil, errors.New("token binding violation - IP address mismatch")
 	}
 
 	// Get user
@@ -305,11 +350,41 @@ func (s *oauth2Service) RefreshAccessToken(ctx context.Context, refreshToken, cl
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
 
+	// ===== ATOMIC TRANSACTION: Rotate refresh token =====
+	// Begin database transaction for atomic token rotation
+	tx, err := s.repo.BeginTransaction(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback if not committed
+
+	// Step 1: Generate new refresh token in same family with same binding
+	newRefreshToken, newTokenID, err := s.generateRefreshTokenInTransaction(ctx, tx, oauthToken.FamilyID, oauthToken.UserID, oauthToken.OrganizationID, clientID, oauthToken.Scope, userAgent, ipAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate new refresh token: %w", err)
+	}
+
+	// Step 2: Mark old refresh token as used and link to new token
+	if err := s.markTokenAsUsedInTransaction(ctx, tx, tokenHash, newTokenID); err != nil {
+		// If MarkAsUsed fails, it means the token was already used (race condition/replay attack)
+		// Transaction will rollback, then revoke the entire token family for security
+		_ = s.repo.OAuthRefreshToken().RevokeTokenFamily(ctx, oauthToken.FamilyID)
+		return nil, errors.New("refresh token already used - possible replay attack, token family revoked")
+	}
+
+	// Commit transaction - both operations succeed atomically
+	if err := tx.Commit(); err != nil {
+		// Commit failed - revoke family for security
+		_ = s.repo.OAuthRefreshToken().RevokeTokenFamily(ctx, oauthToken.FamilyID)
+		return nil, fmt.Errorf("failed to commit token rotation: %w", err)
+	}
+	// ===== END ATOMIC TRANSACTION =====
+
 	return &TokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
 		ExpiresIn:    3600,
-		RefreshToken: refreshToken, // Return same refresh token
+		RefreshToken: newRefreshToken, // Return new refresh token
 		Scope:        oauthToken.Scope,
 	}, nil
 }
@@ -360,36 +435,95 @@ func (s *oauth2Service) generateAccessToken(ctx context.Context, user *models.Us
 	return s.jwtService.GenerateOAuthAccessToken(tokenCtx)
 }
 
-func (s *oauth2Service) generateRefreshToken(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, clientID, scope string) (string, error) {
+func (s *oauth2Service) generateRefreshToken(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, clientID, scope, userAgent, ipAddress string) (string, error) {
+	// Generate new family ID for this token chain
+	familyID := uuid.New()
+	token, _, err := s.generateRefreshTokenWithFamilyID(ctx, familyID, userID, orgID, clientID, scope, userAgent, ipAddress)
+	return token, err
+}
+
+func (s *oauth2Service) generateRefreshTokenWithFamilyID(ctx context.Context, familyID, userID uuid.UUID, orgID *uuid.UUID, clientID, scope, userAgent, ipAddress string) (string, uuid.UUID, error) {
 	// Generate random refresh token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 	refreshToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
 
-	// Hash refresh token for storage
-	hashedToken, err := s.pwdService.Hash(refreshToken)
+	// Hash refresh token for storage (deterministic HMAC-SHA256)
+	tokenHash, err := hashutil.HMACHash(refreshToken)
 	if err != nil {
-		return "", fmt.Errorf("failed to hash refresh token: %w", err)
+		return "", uuid.Nil, fmt.Errorf("failed to hash refresh token: %w", err)
 	}
+
+	// Hash user agent and IP for binding (simple SHA256)
+	userAgentHash := hashutil.SHA256Hash(userAgent)
+	ipHash := hashutil.SHA256Hash(ipAddress)
 
 	// Store in database (expires in 30 days)
 	oauthToken := &models.OAuthRefreshToken{
-		Token:          hashedToken,
+		TokenHash:      tokenHash,
+		FamilyID:       familyID,
 		ClientID:       clientID,
 		UserID:         userID,
 		OrganizationID: orgID,
 		Scope:          scope,
+		UserAgentHash:  userAgentHash,
+		IPHash:         ipHash,
 		ExpiresAt:      time.Now().Add(30 * 24 * time.Hour),
 		Revoked:        false,
 	}
 
 	if err := s.repo.OAuthRefreshToken().Create(ctx, oauthToken); err != nil {
-		return "", fmt.Errorf("failed to store refresh token: %w", err)
+		return "", uuid.Nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
-	return refreshToken, nil
+	return refreshToken, oauthToken.ID, nil
+}
+
+// generateRefreshTokenInTransaction creates a new refresh token within a transaction
+func (s *oauth2Service) generateRefreshTokenInTransaction(ctx context.Context, tx repository.Transaction, familyID, userID uuid.UUID, orgID *uuid.UUID, clientID, scope, userAgent, ipAddress string) (string, uuid.UUID, error) {
+	// Generate random refresh token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", uuid.Nil, err
+	}
+	refreshToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
+
+	// Hash refresh token for storage (deterministic HMAC-SHA256)
+	tokenHash, err := hashutil.HMACHash(refreshToken)
+	if err != nil {
+		return "", uuid.Nil, fmt.Errorf("failed to hash refresh token: %w", err)
+	}
+
+	// Hash user agent and IP for binding (simple SHA256)
+	userAgentHash := hashutil.SHA256Hash(userAgent)
+	ipHash := hashutil.SHA256Hash(ipAddress)
+
+	// Store in database (expires in 30 days)
+	oauthToken := &models.OAuthRefreshToken{
+		TokenHash:      tokenHash,
+		FamilyID:       familyID,
+		ClientID:       clientID,
+		UserID:         userID,
+		OrganizationID: orgID,
+		Scope:          scope,
+		UserAgentHash:  userAgentHash,
+		IPHash:         ipHash,
+		ExpiresAt:      time.Now().Add(30 * 24 * time.Hour),
+		Revoked:        false,
+	}
+
+	if err := tx.OAuthRefreshToken().Create(ctx, oauthToken); err != nil {
+		return "", uuid.Nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	return refreshToken, oauthToken.ID, nil
+}
+
+// markTokenAsUsedInTransaction marks a token as used within a transaction
+func (s *oauth2Service) markTokenAsUsedInTransaction(ctx context.Context, tx repository.Transaction, tokenHash string, replacedByID uuid.UUID) error {
+	return tx.OAuthRefreshToken().MarkAsUsed(ctx, tokenHash, replacedByID)
 }
 
 func (s *oauth2Service) getUserPermissions(ctx context.Context, user *models.User, orgID *uuid.UUID) ([]models.Permission, error) {

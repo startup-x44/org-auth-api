@@ -195,6 +195,8 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(c *gin.Context) {
 		RedirectURI:  redirectURI,
 		CodeVerifier: codeVerifier,
 		GrantType:    "authorization_code",
+		UserAgent:    c.GetHeader("User-Agent"),
+		IPAddress:    c.ClientIP(),
 	}
 
 	tokenResp, err := h.oauth2Service.ExchangeCodeForTokens(c.Request.Context(), tokenReq)
@@ -221,7 +223,11 @@ func (h *OAuth2Handler) handleRefreshTokenGrant(c *gin.Context) {
 		return
 	}
 
-	tokenResp, err := h.oauth2Service.RefreshAccessToken(c.Request.Context(), refreshToken, clientID)
+	// Get user agent and IP for token binding
+	userAgent := c.GetHeader("User-Agent")
+	ipAddress := c.ClientIP()
+
+	tokenResp, err := h.oauth2Service.RefreshAccessToken(c.Request.Context(), refreshToken, clientID, userAgent, ipAddress)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":             "invalid_grant",

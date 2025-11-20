@@ -29,7 +29,7 @@ func (ClientApp) TableName() string {
 // AuthorizationCode represents an OAuth2 authorization code
 type AuthorizationCode struct {
 	ID                  uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	Code                string     `gorm:"type:varchar(255);uniqueIndex;not null" json:"code"`
+	CodeHash            string     `gorm:"type:varchar(64);uniqueIndex;not null" json:"-"` // HMAC-SHA256 hash of code
 	ClientID            string     `gorm:"type:varchar(255);not null;index" json:"client_id"`
 	UserID              uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
 	OrganizationID      *uuid.UUID `gorm:"type:uuid;index" json:"organization_id,omitempty"`
@@ -50,13 +50,19 @@ func (AuthorizationCode) TableName() string {
 // OAuthRefreshToken represents a refresh token for OAuth2
 type OAuthRefreshToken struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	Token          string     `gorm:"type:varchar(255);uniqueIndex;not null" json:"-"` // hashed
+	TokenHash      string     `gorm:"type:varchar(64);uniqueIndex;not null" json:"-"` // HMAC-SHA256 hash of token
+	FamilyID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"family_id"`      // Groups all tokens in rotation chain
 	ClientID       string     `gorm:"type:varchar(255);not null;index" json:"client_id"`
 	UserID         uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
 	OrganizationID *uuid.UUID `gorm:"type:uuid;index" json:"organization_id,omitempty"`
 	Scope          string     `gorm:"type:text" json:"scope"`
+	UserAgentHash  string     `gorm:"type:varchar(64);index" json:"-"`                    // SHA256 hash of user agent for binding
+	IPHash         string     `gorm:"type:varchar(64);index" json:"-"`                    // SHA256 hash of IP for binding
+	DeviceID       string     `gorm:"type:varchar(255);index" json:"device_id,omitempty"` // Optional device identifier
 	ExpiresAt      time.Time  `gorm:"not null;index" json:"expires_at"`
 	Revoked        bool       `gorm:"default:false;index" json:"revoked"`
+	UsedAt         *time.Time `gorm:"index" json:"used_at,omitempty"`                  // Track when token was rotated
+	ReplacedByID   *uuid.UUID `gorm:"type:uuid;index" json:"replaced_by_id,omitempty"` // ID of new token after rotation
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }

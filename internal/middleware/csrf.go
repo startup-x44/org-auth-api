@@ -15,6 +15,7 @@ type CSRFConfig struct {
 	Secure     bool
 	TokenName  string
 	HeaderName string
+	SkipPaths  []string
 }
 
 // DefaultCSRFConfig returns default CSRF configuration
@@ -33,6 +34,14 @@ func CSRFMiddleware(config CSRFConfig) gin.HandlerFunc {
 	tokenStore := &sync.Map{}
 
 	return func(c *gin.Context) {
+		// Skip CSRF check for configured paths
+		for _, path := range config.SkipPaths {
+			if c.Request.URL.Path == path {
+				c.Next()
+				return
+			}
+		}
+
 		// Skip CSRF check for safe methods
 		if isSafeMethod(c.Request.Method) {
 			// For GET requests, provide CSRF token in header

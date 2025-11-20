@@ -8,6 +8,8 @@ import (
 	"auth-service/pkg/email"
 	"auth-service/pkg/jwt"
 	"auth-service/pkg/password"
+
+	"github.com/go-redis/redis/v8"
 )
 
 // AuthService defines the interface for authentication business logic
@@ -17,6 +19,7 @@ type AuthService interface {
 	SessionService() SessionService
 	BackgroundJobService() BackgroundJobService
 	RoleService() RoleService
+	RevocationService() RevocationService
 	ValidateToken(ctx context.Context, token string) (*TokenClaims, error)
 	HealthCheck(ctx context.Context) (*HealthCheckResponse, error)
 }
@@ -49,13 +52,14 @@ type authService struct {
 	sessionSvc          SessionService
 	jobSvc              BackgroundJobService
 	roleSvc             RoleService
+	revocationSvc       RevocationService
 	jwtService          *jwt.Service
 	emailService        email.Service
 	repo                repository.Repository
 }
 
 // NewAuthService creates a new auth service
-func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwordService *password.Service, emailService email.Service) AuthService {
+func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwordService *password.Service, emailService email.Service, redisClient *redis.Client) AuthService {
 	// Session service
 	sessionConfig := &SessionConfig{
 		MaxSessionsPerUser:          5,
@@ -85,12 +89,16 @@ func NewAuthService(repo repository.Repository, jwtService *jwt.Service, passwor
 	// Initialize role service with a nil audit logger for now
 	roleSvc := NewRoleService(repo, nil)
 
+	// Initialize revocation service
+	revocationSvc := NewRevocationService(repo, jwtService, redisClient)
+
 	return &authService{
 		userService:         userSvc,
 		organizationService: NewOrganizationService(repo, emailService),
 		sessionSvc:          sessionSvc,
 		jobSvc:              jobSvc,
 		roleSvc:             roleSvc,
+		revocationSvc:       revocationSvc,
 		jwtService:          jwtService,
 		emailService:        emailService,
 		repo:                repo,
@@ -102,6 +110,7 @@ func (s *authService) OrganizationService() OrganizationService   { return s.org
 func (s *authService) SessionService() SessionService             { return s.sessionSvc }
 func (s *authService) BackgroundJobService() BackgroundJobService { return s.jobSvc }
 func (s *authService) RoleService() RoleService                   { return s.roleSvc }
+func (s *authService) RevocationService() RevocationService       { return s.revocationSvc }
 
 // ValidateToken validates JWT token and returns safe claims
 func (s *authService) ValidateToken(ctx context.Context, token string) (*TokenClaims, error) {

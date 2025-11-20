@@ -1,14 +1,7 @@
 package test
-package tests
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -45,9 +38,9 @@ func TestOAuthFlow_Integration(t *testing.T) {
 	t.Run("Complete OAuth2.1 Authorization Code + PKCE Flow", func(t *testing.T) {
 		// Step 1: Create a test client application
 		clientApp, err := clientAppSvc.CreateClientApp(ctx, testUser.ID, testTenant.ID, &service.CreateClientAppRequest{
-			Name:         "Test OAuth Client",
-			Description:  "Integration test client",
-			RedirectURIs: []string{"http://localhost:3000/callback"},
+			Name:          "Test OAuth Client",
+			Description:   "Integration test client",
+			RedirectURIs:  []string{"http://localhost:3000/callback"},
 			AllowedScopes: []string{"profile", "email"},
 		})
 		require.NoError(t, err)
@@ -134,9 +127,9 @@ func TestOAuthFlow_Integration(t *testing.T) {
 	t.Run("Invalid PKCE Code Verifier", func(t *testing.T) {
 		// Create client app
 		clientApp, err := clientAppSvc.CreateClientApp(ctx, testUser.ID, testTenant.ID, &service.CreateClientAppRequest{
-			Name:         "Test Invalid PKCE Client",
-			Description:  "Test client for invalid PKCE",
-			RedirectURIs: []string{"http://localhost:3000/callback"},
+			Name:          "Test Invalid PKCE Client",
+			Description:   "Test client for invalid PKCE",
+			RedirectURIs:  []string{"http://localhost:3000/callback"},
 			AllowedScopes: []string{"profile"},
 		})
 		require.NoError(t, err)
@@ -178,9 +171,9 @@ func TestOAuthFlow_Integration(t *testing.T) {
 	t.Run("Authorization Code Expiration", func(t *testing.T) {
 		// Create client app
 		clientApp, err := clientAppSvc.CreateClientApp(ctx, testUser.ID, testTenant.ID, &service.CreateClientAppRequest{
-			Name:         "Test Expiration Client",
-			Description:  "Test client for code expiration",
-			RedirectURIs: []string{"http://localhost:3000/callback"},
+			Name:          "Test Expiration Client",
+			Description:   "Test client for code expiration",
+			RedirectURIs:  []string{"http://localhost:3000/callback"},
 			AllowedScopes: []string{"profile"},
 		})
 		require.NoError(t, err)

@@ -5,19 +5,23 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
+	"auth-service/internal/models"
 	"auth-service/internal/service"
 )
 
 // AuthHandler handles authentication endpoints
 type AuthHandler struct {
-	authService service.AuthService
+	authService  service.AuthService
+	auditService service.AuditService
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(authService service.AuthService) *AuthHandler {
+func NewAuthHandler(authService service.AuthService, auditService service.AuditService) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
+		authService:  authService,
+		auditService: auditService,
 	}
 }
 
@@ -34,6 +38,22 @@ func (h *AuthHandler) RegisterGlobal(c *gin.Context) {
 	}
 
 	response, err := h.authService.UserService().RegisterGlobal(c.Request.Context(), &req)
+
+	// Audit log: register attempt
+	var userID *uuid.UUID
+	if response != nil && response.User != nil {
+		parsedID, parseErr := uuid.Parse(response.User.ID)
+		if parseErr == nil {
+			userID = &parsedID
+		}
+	}
+
+	h.auditService.LogAuth(c.Request.Context(), models.ActionRegister, userID, err == nil, map[string]interface{}{
+		"email":      req.Email,
+		"first_name": req.FirstName,
+		"last_name":  req.LastName,
+	}, err)
+
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -62,6 +82,26 @@ func (h *AuthHandler) LoginGlobal(c *gin.Context) {
 	}
 
 	response, err := h.authService.UserService().LoginGlobal(c.Request.Context(), &req)
+
+	// Audit log: login attempt
+	var userID *uuid.UUID
+	if response != nil && response.User != nil {
+		parsedID, parseErr := uuid.Parse(response.User.ID)
+		if parseErr == nil {
+			userID = &parsedID
+		}
+	}
+
+	action := models.ActionLogin
+	if err != nil {
+		action = models.ActionLoginFailed
+	}
+
+	h.auditService.LogAuth(c.Request.Context(), action, userID, err == nil, map[string]interface{}{
+		"email":               req.Email,
+		"organizations_count": len(response.Organizations),
+	}, err)
+
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
@@ -212,6 +252,20 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	err := h.authService.UserService().Logout(c.Request.Context(), &req)
+
+	// Audit log: logout
+	var parsedUserID *uuid.UUID
+	if userID != "" {
+		id, parseErr := uuid.Parse(userID)
+		if parseErr == nil {
+			parsedUserID = &id
+		}
+	}
+
+	h.auditService.LogAuth(c.Request.Context(), models.ActionLogout, parsedUserID, err == nil, map[string]interface{}{
+		"session_id": req.SessionID,
+	}, err)
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -290,6 +344,18 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 
 	err := h.authService.UserService().ChangePassword(c.Request.Context(), userID, &req)
+
+	// Audit log: password change
+	var parsedUserID *uuid.UUID
+	if userID != "" {
+		id, parseErr := uuid.Parse(userID)
+		if parseErr == nil {
+			parsedUserID = &id
+		}
+	}
+
+	h.auditService.LogAuth(c.Request.Context(), models.ActionPasswordChange, parsedUserID, err == nil, nil, err)
+
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,

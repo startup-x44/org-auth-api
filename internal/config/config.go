@@ -18,6 +18,8 @@ type Config struct {
 	CORS        CORSConfig
 	RateLimit   RateLimitConfig
 	Email       EmailConfig
+	Logging     LoggingConfig
+	Tracing     TracingConfig
 	Environment string
 }
 
@@ -50,16 +52,39 @@ type JWTConfig struct {
 	SigningMethod   string
 }
 
+type LoggingConfig struct {
+	Level  string // debug, info, warn, error
+	Format string // json, console
+}
+
+type TracingConfig struct {
+	Enabled      bool    // Enable/disable distributed tracing
+	ServiceName  string  // Service name for traces
+	ExporterType string  // "otlp", "stdout", "jaeger"
+	OTLPEndpoint string  // OTLP gRPC endpoint (e.g., "localhost:4317")
+	OTLPInsecure bool    // Use insecure connection (disable TLS)
+	SamplingRate float64 // Trace sampling rate (0.0 to 1.0)
+}
+
 type CORSConfig struct {
 	AllowedOrigins []string // List of allowed origins or patterns like "*.sprout.com"
 }
 
 type RateLimitConfig struct {
-	LoginAttempts int // per 15 minutes per IP
-	PasswordReset int // per hour per email
-	APICalls      int // per minute per user
-	Registration  int // per hour per IP
-	MaxSessions   int // per user
+	Enabled             bool // Enable/disable rate limiting globally
+	LoginAttempts       int  // Max attempts per LoginWindow
+	LoginWindow         int  // Window in seconds (default: 900 = 15 min)
+	PasswordReset       int  // Max attempts per PasswordResetWindow
+	PasswordResetWindow int  // Window in seconds (default: 3600 = 1 hour)
+	TokenRefresh        int  // Max token refresh attempts per TokenRefreshWindow
+	TokenRefreshWindow  int  // Window in seconds (default: 60 = 1 min)
+	Registration        int  // Max registrations per RegistrationWindow
+	RegistrationWindow  int  // Window in seconds (default: 3600 = 1 hour)
+	OAuth2Token         int  // Max OAuth2 token requests per OAuth2TokenWindow
+	OAuth2TokenWindow   int  // Window in seconds (default: 60 = 1 min)
+	APICalls            int  // General API calls per APICallsWindow
+	APICallsWindow      int  // Window in seconds (default: 60 = 1 min)
+	MaxSessions         int  // Max concurrent sessions per user
 }
 
 type EmailConfig struct {
@@ -109,11 +134,20 @@ func Load() *Config {
 			AllowedOrigins: getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:3000", "*.localhost:3000"}),
 		},
 		RateLimit: RateLimitConfig{
-			LoginAttempts: getEnvAsInt("RATE_LIMIT_LOGIN_ATTEMPTS", 5), // 5 per 15 min per IP
-			PasswordReset: getEnvAsInt("RATE_LIMIT_PASSWORD_RESET", 3), // 3 per hour per email
-			APICalls:      getEnvAsInt("RATE_LIMIT_API_CALLS", 1000),   // 1000 per minute per user
-			Registration:  getEnvAsInt("RATE_LIMIT_REGISTRATION", 10),  // 10 per hour per IP
-			MaxSessions:   getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),   // 5 per user
+			Enabled:             getEnv("RATE_LIMIT_ENABLED", "true") == "true",
+			LoginAttempts:       getEnvAsInt("RATE_LIMIT_LOGIN_ATTEMPTS", 5),
+			LoginWindow:         getEnvAsInt("RATE_LIMIT_LOGIN_WINDOW", 900), // 15 minutes
+			PasswordReset:       getEnvAsInt("RATE_LIMIT_PASSWORD_RESET", 3),
+			PasswordResetWindow: getEnvAsInt("RATE_LIMIT_PASSWORD_RESET_WINDOW", 3600), // 1 hour
+			TokenRefresh:        getEnvAsInt("RATE_LIMIT_TOKEN_REFRESH", 10),
+			TokenRefreshWindow:  getEnvAsInt("RATE_LIMIT_TOKEN_REFRESH_WINDOW", 60), // 1 minute
+			Registration:        getEnvAsInt("RATE_LIMIT_REGISTRATION", 10),
+			RegistrationWindow:  getEnvAsInt("RATE_LIMIT_REGISTRATION_WINDOW", 3600), // 1 hour
+			OAuth2Token:         getEnvAsInt("RATE_LIMIT_OAUTH2_TOKEN", 20),
+			OAuth2TokenWindow:   getEnvAsInt("RATE_LIMIT_OAUTH2_TOKEN_WINDOW", 60), // 1 minute
+			APICalls:            getEnvAsInt("RATE_LIMIT_API_CALLS", 1000),
+			APICallsWindow:      getEnvAsInt("RATE_LIMIT_API_CALLS_WINDOW", 60), // 1 minute
+			MaxSessions:         getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),
 		},
 		Email: EmailConfig{
 			Host:        getEnv("SMTP_HOST", "sandbox.smtp.mailtrap.io"),
@@ -124,6 +158,18 @@ func Load() *Config {
 			FromName:    getEnv("SMTP_FROM_NAME", "Auth Service"),
 			Enabled:     getEnv("EMAIL_ENABLED", "true") == "true",
 			FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+		},
+		Logging: LoggingConfig{
+			Level:  getEnv("LOG_LEVEL", "info"),
+			Format: getEnv("LOG_FORMAT", "json"),
+		},
+		Tracing: TracingConfig{
+			Enabled:      getEnv("TRACING_ENABLED", "false") == "true",
+			ServiceName:  getEnv("TRACING_SERVICE_NAME", "auth-service"),
+			ExporterType: getEnv("TRACING_EXPORTER", "stdout"), // otlp, stdout
+			OTLPEndpoint: getEnv("TRACING_OTLP_ENDPOINT", "localhost:4317"),
+			OTLPInsecure: getEnv("TRACING_OTLP_INSECURE", "false") == "true",
+			SamplingRate: getEnvAsFloat("TRACING_SAMPLING_RATE", 1.0),
 		},
 		Environment: getEnv("ENVIRONMENT", "development"),
 	}
@@ -147,6 +193,15 @@ func getEnvAsInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue

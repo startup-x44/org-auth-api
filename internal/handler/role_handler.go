@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"auth-service/internal/models"
 	"auth-service/internal/service"
+	"auth-service/pkg/logger"
 )
 
 // ------------------------
@@ -37,16 +38,32 @@ func (h *RoleHandler) successResponse(c *gin.Context, code int, message string, 
 // ------------------------
 
 type RoleHandler struct {
-	authService service.AuthService
+	authService  service.AuthService
+	auditService service.AuditService
 }
 
-func NewRoleHandler(authService service.AuthService) *RoleHandler {
-	return &RoleHandler{authService: authService}
+func NewRoleHandler(authService service.AuthService, auditService service.AuditService) *RoleHandler {
+	return &RoleHandler{
+		authService:  authService,
+		auditService: auditService,
+	}
 }
 
 // ------------------------
 // Helper Methods
 // ------------------------
+
+func (h *RoleHandler) getUserID(c *gin.Context) (*uuid.UUID, error) {
+	userIDStr, ok := c.Request.Context().Value("user_id").(string)
+	if !ok || userIDStr == "" {
+		return nil, nil
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return nil, err
+	}
+	return &userID, nil
+}
 
 func (h *RoleHandler) checkPermission(c *gin.Context, orgID, permission string) bool {
 	userID, ok := c.Request.Context().Value("user_id").(string)
@@ -69,7 +86,16 @@ func (h *RoleHandler) checkPermission(c *gin.Context, orgID, permission string) 
 	}
 
 	hasPermission, err := h.authService.RoleService().HasPermission(c.Request.Context(), userUUID, orgUUID, permission)
-	return err == nil && hasPermission
+	if err != nil {
+		logger.Error(c.Request.Context()).
+			Err(err).
+			Str("user_id", userID).
+			Str("org_id", orgID).
+			Str("permission", permission).
+			Msg("Failed to check permission")
+		return false
+	}
+	return hasPermission
 }
 
 func (h *RoleHandler) parseUUIDs(c *gin.Context) (uuid.UUID, uuid.UUID, error) {
@@ -91,6 +117,21 @@ func (h *RoleHandler) parseUUIDs(c *gin.Context) (uuid.UUID, uuid.UUID, error) {
 	return roleUUID, orgUUID, nil
 }
 
+func (h *RoleHandler) logAuthorizationFailure(c *gin.Context, resource string, resourceID *uuid.UUID, orgID *uuid.UUID, requiredPermission string) {
+	userID, _ := h.getUserID(c)
+	details := map[string]interface{}{
+		"required_permission": requiredPermission,
+	}
+	if orgID != nil {
+		details["org_id"] = orgID.String()
+	}
+	if resourceID != nil {
+		details["resource_id"] = resourceID.String()
+	}
+
+	h.auditService.LogPermission(c.Request.Context(), models.ActionAuthorizationFailed, *userID, resourceID, orgID, false, details, nil)
+}
+
 // ------------------------
 // Role: CREATE
 // ------------------------
@@ -104,6 +145,7 @@ func (h *RoleHandler) CreateRole(c *gin.Context) {
 	}
 
 	if !h.checkPermission(c, orgID, "role:create") {
+		h.logAuthorizationFailure(c, models.ResourceRole, nil, &orgUUID, "role:create")
 		h.errorResponse(c, http.StatusForbidden, "You don't have permission to create roles")
 		return
 	}
@@ -114,12 +156,24 @@ func (h *RoleHandler) CreateRole(c *gin.Context) {
 		return
 	}
 
-	// Set the organization ID from the URL parameter
 	req.OrganizationID = orgUUID
 
 	result, err := h.authService.RoleService().CreateRole(c.Request.Context(), &req)
+
+	userID, _ := h.getUserID(c)
+	var roleID *uuid.UUID
+	if result != nil {
+		roleID = &result.ID
+	}
+
+	h.auditService.LogRole(c.Request.Context(), models.ActionRoleCreate, *userID, roleID, &orgUUID, err == nil, map[string]interface{}{
+		"role_name":        req.Name,
+		"role_description": req.Description,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "Failed to create role. Please check the role details and try again")
+		logger.Error(c.Request.Context()).Err(err).Msg("Failed to create role")
+		h.errorResponse(c, http.StatusBadRequest, "Failed to create role")
 		return
 	}
 
@@ -134,6 +188,8 @@ func (h *RoleHandler) GetRole(c *gin.Context) {
 	orgID := c.Param("orgId")
 
 	if !h.checkPermission(c, orgID, "role:view") {
+		orgUUID, _ := uuid.Parse(orgID)
+		h.logAuthorizationFailure(c, models.ResourceRole, nil, &orgUUID, "role:view")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -144,7 +200,14 @@ func (h *RoleHandler) GetRole(c *gin.Context) {
 	}
 
 	result, err := h.authService.RoleService().GetRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogRole(c.Request.Context(), models.ActionRoleView, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id": roleUUID.String(),
+	}, err)
+
 	if err != nil {
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to get role")
 		h.errorResponse(c, http.StatusNotFound, "Role not found")
 		return
 	}
@@ -160,6 +223,9 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 	orgID := c.Param("orgId")
 
 	if !h.checkPermission(c, orgID, "role:update") {
+		orgUUID, _ := uuid.Parse(orgID)
+		roleUUID, _ := uuid.Parse(c.Param("roleId"))
+		h.logAuthorizationFailure(c, models.ResourceRole, &roleUUID, &orgUUID, "role:update")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -176,10 +242,17 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 	}
 
 	result, err := h.authService.RoleService().UpdateRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, &req)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogRole(c.Request.Context(), models.ActionRoleUpdate, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id":      roleUUID.String(),
+		"display_name": req.DisplayName,
+		"description":  req.Description,
+	}, err)
+
 	if err != nil {
-		// Log the actual error for debugging
-		fmt.Printf("UpdateRole error: %v\n", err)
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to update role")
+		h.errorResponse(c, http.StatusBadRequest, "Failed to update role")
 		return
 	}
 
@@ -194,6 +267,9 @@ func (h *RoleHandler) DeleteRole(c *gin.Context) {
 	orgID := c.Param("orgId")
 
 	if !h.checkPermission(c, orgID, "role:delete") {
+		orgUUID, _ := uuid.Parse(orgID)
+		roleUUID, _ := uuid.Parse(c.Param("roleId"))
+		h.logAuthorizationFailure(c, models.ResourceRole, &roleUUID, &orgUUID, "role:delete")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -204,8 +280,15 @@ func (h *RoleHandler) DeleteRole(c *gin.Context) {
 	}
 
 	err = h.authService.RoleService().DeleteRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogRole(c.Request.Context(), models.ActionRoleDelete, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id": roleUUID.String(),
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to delete role")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to delete role")
 		return
 	}
 
@@ -225,24 +308,29 @@ func (h *RoleHandler) ListPermissions(c *gin.Context) {
 	}
 
 	if !h.checkPermission(c, orgID, "role:view") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, nil, &orgUUID, "role:view")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
 
-	// Check if user is superadmin
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	var result []*service.PermissionResponse
 
 	if isSuperadmin {
-		// Superadmin: show all permissions (system + custom)
 		result, err = h.authService.RoleService().ListAllPermissionsForOrganization(c.Request.Context(), orgUUID)
 	} else {
-		// Non-superadmin: show only custom permissions (is_system = false)
 		result, err = h.authService.RoleService().ListCustomPermissionsForOrganization(c.Request.Context(), orgUUID)
 	}
 
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionView, *userID, nil, &orgUUID, err == nil, map[string]interface{}{
+		"is_superadmin": isSuperadmin,
+		"count":         len(result),
+	}, err)
+
 	if err != nil {
+		logger.Error(c.Request.Context()).Err(err).Msg("Failed to load permissions")
 		h.errorResponse(c, http.StatusInternalServerError, "Failed to load permissions")
 		return
 	}
@@ -262,6 +350,7 @@ func (h *RoleHandler) AssignPermissions(c *gin.Context) {
 	}
 
 	if !h.checkPermission(c, orgID, "role:update") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, &roleUUID, &orgUUID, "role:update")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -270,14 +359,21 @@ func (h *RoleHandler) AssignPermissions(c *gin.Context) {
 		Permissions []string `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
-	// FIXED: use org-aware method
 	err = h.authService.RoleService().AssignPermissionsToRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, req.Permissions)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionGrant, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id":     roleUUID.String(),
+		"permissions": req.Permissions,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to assign permissions")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to assign permissions")
 		return
 	}
 
@@ -296,6 +392,7 @@ func (h *RoleHandler) RevokePermissions(c *gin.Context) {
 	}
 
 	if !h.checkPermission(c, orgID, "role:update") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, &roleUUID, &orgUUID, "role:update")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -304,13 +401,21 @@ func (h *RoleHandler) RevokePermissions(c *gin.Context) {
 		Permissions []string `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
 	err = h.authService.RoleService().RevokePermissionsFromRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, req.Permissions)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionRevoke, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id":     roleUUID.String(),
+		"permissions": req.Permissions,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to revoke permissions")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to revoke permissions")
 		return
 	}
 
@@ -330,8 +435,8 @@ func (h *RoleHandler) CreatePermission(c *gin.Context) {
 	}
 
 	if !h.checkPermission(c, orgID, "role:create") {
-		h.errorResponse(c, http.StatusForbidden,
-			"Insufficient permissions")
+		h.logAuthorizationFailure(c, models.ResourcePermission, nil, &orgUUID, "role:create")
+		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
 
@@ -343,7 +448,7 @@ func (h *RoleHandler) CreatePermission(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
@@ -355,8 +460,23 @@ func (h *RoleHandler) CreatePermission(c *gin.Context) {
 		req.Description,
 		req.Category,
 	)
+
+	userID, _ := h.getUserID(c)
+	var permID *uuid.UUID
+	if result != nil && result.ID != uuid.Nil {
+		permID = &result.ID
+	}
+
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionCreate, *userID, permID, &orgUUID, err == nil, map[string]interface{}{
+		"name":         req.Name,
+		"display_name": req.DisplayName,
+		"description":  req.Description,
+		"category":     req.Category,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Msg("Failed to create permission")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to create permission")
 		return
 	}
 
@@ -376,8 +496,14 @@ func (h *RoleHandler) UpdatePermission(c *gin.Context) {
 	}
 
 	permissionID := c.Param("permission_id")
+	permUUID, err := uuid.Parse(permissionID)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "Invalid permission ID")
+		return
+	}
 
 	if !h.checkPermission(c, orgID, "role:update") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, &permUUID, &orgUUID, "role:update")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -389,7 +515,7 @@ func (h *RoleHandler) UpdatePermission(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.errorResponse(c, http.StatusBadRequest, err.Error())
+		h.errorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
@@ -401,8 +527,18 @@ func (h *RoleHandler) UpdatePermission(c *gin.Context) {
 		req.Description,
 		req.Category,
 	)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionUpdate, *userID, &permUUID, &orgUUID, err == nil, map[string]interface{}{
+		"permission_id": permissionID,
+		"display_name":  req.DisplayName,
+		"description":   req.Description,
+		"category":      req.Category,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("permission_id", permissionID).Msg("Failed to update permission")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to update permission")
 		return
 	}
 
@@ -422,8 +558,14 @@ func (h *RoleHandler) DeletePermission(c *gin.Context) {
 	}
 
 	permID := c.Param("permission_id")
+	permUUID, err := uuid.Parse(permID)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "Invalid permission ID")
+		return
+	}
 
 	if !h.checkPermission(c, orgID, "role:delete") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, &permUUID, &orgUUID, "role:delete")
 		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
@@ -433,8 +575,15 @@ func (h *RoleHandler) DeletePermission(c *gin.Context) {
 		permID,
 		orgUUID,
 	)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionDelete, *userID, &permUUID, &orgUUID, err == nil, map[string]interface{}{
+		"permission_id": permID,
+	}, err)
+
 	if err != nil {
-		h.errorResponse(c, http.StatusUnprocessableEntity, err.Error())
+		logger.Error(c.Request.Context()).Err(err).Str("permission_id", permID).Msg("Failed to delete permission")
+		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to delete permission")
 		return
 	}
 
