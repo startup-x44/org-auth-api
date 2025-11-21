@@ -81,6 +81,9 @@ type Metrics struct {
 	// Error metrics
 	ErrorsTotal          *prometheus.CounterVec
 	PanicsRecoveredTotal prometheus.Counter
+
+	// SLI/SLO metrics for business monitoring
+	SLI *SLIMetrics
 }
 
 var (
@@ -438,6 +441,9 @@ func Initialize() *Metrics {
 				Help: "Total number of panics recovered",
 			},
 		),
+
+		// Initialize SLI/SLO metrics
+		SLI: NewSLIMetrics(),
 	}
 
 	return instance

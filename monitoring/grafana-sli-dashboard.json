@@ -1,0 +1,368 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Auth Service - SLI/SLO Dashboard",
+    "tags": ["auth-service", "sli", "slo", "business-metrics"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Service Health Score",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "auth:service_health_score:5m",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.95},
+                {"color": "green", "value": 0.99}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Authentication Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "auth:authentication_success_rate:5m",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0.995,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.999},
+                {"color": "green", "value": 0.9995}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Authentication Latency Distribution",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "auth:authentication_latency_p95:5m",
+            "legendFormat": "P95",
+            "refId": "A"
+          },
+          {
+            "expr": "auth:authentication_latency_p99:5m", 
+            "legendFormat": "P99",
+            "refId": "B"
+          },
+          {
+            "expr": "0.5",
+            "legendFormat": "SLO Target (500ms)",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear",
+              "pointSize": 1,
+              "showPoints": "never"
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Token Validation Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "auth:token_validation_success_rate:5m",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0.9999,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.9999},
+                {"color": "green", "value": 0.99995}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Session Creation Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "auth:session_creation_success_rate:5m",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0.9995,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.9995},
+                {"color": "green", "value": 0.99975}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "OAuth Flow Success Rate by Grant Type",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (grant_type) (rate(auth_oauth_flow_attempts_total{result=\"success\"}[5m])) / sum by (grant_type) (rate(auth_oauth_flow_attempts_total[5m]))",
+            "legendFormat": "{{grant_type}}",
+            "refId": "A"
+          },
+          {
+            "expr": "0.995",
+            "legendFormat": "SLO Target (99.5%)",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0.99,
+            "max": 1
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Permission Check Latency",
+        "type": "timeseries", 
+        "targets": [
+          {
+            "expr": "auth:permission_check_latency_p95:5m",
+            "legendFormat": "P95 Latency",
+            "refId": "A"
+          },
+          {
+            "expr": "0.05",
+            "legendFormat": "SLO Target (50ms)",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "max": 0.1
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+      },
+      {
+        "id": 8,
+        "title": "Concurrent Users",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "auth_concurrent_users",
+            "legendFormat": "Current",
+            "refId": "A"
+          },
+          {
+            "expr": "auth_peak_concurrent_users",
+            "legendFormat": "24h Peak",
+            "refId": "B"
+          },
+          {
+            "expr": "8000",
+            "legendFormat": "Capacity Threshold",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
+      },
+      {
+        "id": 9,
+        "title": "Error Budget Remaining (30 days)",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "auth:authentication_error_budget_remaining:30d",
+            "legendFormat": "Authentication",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "percentunit",
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.2},
+                {"color": "green", "value": 0.5}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40}
+      },
+      {
+        "id": 10,
+        "title": "Security Events Rate",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (activity_type) (rate(auth_suspicious_activity_total[5m]))",
+            "legendFormat": "{{activity_type}}",
+            "refId": "A"
+          },
+          {
+            "expr": "sum by (reason) (rate(auth_failed_login_attempts_total[5m]))",
+            "legendFormat": "Failed Login: {{reason}}",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40}
+      },
+      {
+        "id": 11,
+        "title": "Service Availability",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "auth_service_availability",
+            "legendFormat": "{{component}}",
+            "refId": "A"
+          },
+          {
+            "expr": "auth_database_availability",
+            "legendFormat": "Database: {{database}}",
+            "refId": "B"
+          },
+          {
+            "expr": "auth_redis_availability",
+            "legendFormat": "Redis: {{role}}",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "unit": "short",
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 10
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 48}
+      },
+      {
+        "id": 12,
+        "title": "Business Volume Metrics",
+        "type": "stat", 
+        "targets": [
+          {
+            "expr": "auth_daily_active_users",
+            "legendFormat": "DAU",
+            "refId": "A"
+          },
+          {
+            "expr": "auth_monthly_active_users", 
+            "legendFormat": "MAU",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 56}
+      },
+      {
+        "id": 13,
+        "title": "Error Rates by Category",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (error_code) (rate(auth_client_errors_total[5m]))",
+            "legendFormat": "Client Error: {{error_code}}",
+            "refId": "A"
+          },
+          {
+            "expr": "sum by (error_code) (rate(auth_server_errors_total[5m]))",
+            "legendFormat": "Server Error: {{error_code}}",
+            "refId": "B"
+          },
+          {
+            "expr": "sum by (domain) (rate(auth_business_logic_errors_total[5m]))",
+            "legendFormat": "Business Error: {{domain}}",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 56}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

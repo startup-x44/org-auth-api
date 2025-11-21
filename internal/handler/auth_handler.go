@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"auth-service/internal/errors"
 	"auth-service/internal/models"
 	"auth-service/internal/service"
 )
@@ -15,6 +16,7 @@ import (
 type AuthHandler struct {
 	authService  service.AuthService
 	auditService service.AuditService
+	errorMapper  *errors.ErrorMapper
 }
 
 // NewAuthHandler creates a new auth handler
@@ -22,6 +24,7 @@ func NewAuthHandler(authService service.AuthService, auditService service.AuditS
 	return &AuthHandler{
 		authService:  authService,
 		auditService: auditService,
+		errorMapper:  errors.NewErrorMapper(),
 	}
 }
 
@@ -29,10 +32,8 @@ func NewAuthHandler(authService service.AuthService, auditService service.AuditS
 func (h *AuthHandler) RegisterGlobal(c *gin.Context) {
 	var req service.RegisterGlobalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request data",
-			"errors":  err.Error(),
+		errors.SendErrorResponse(c, errors.ErrCodeValidationFailed, "Invalid request data", map[string]interface{}{
+			"details": err.Error(),
 		})
 		return
 	}
@@ -55,28 +56,20 @@ func (h *AuthHandler) RegisterGlobal(c *gin.Context) {
 	}, err)
 
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		errorCode, message := h.errorMapper.MapServiceError(err)
+		errors.SendErrorResponse(c, errorCode, message, nil)
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"data":    response,
-		"message": "User registered successfully. Please create or join an organization.",
-	})
+	errors.SendSuccessResponse(c, "User registered successfully. Please create or join an organization.", response)
 }
 
 // LoginGlobal handles global user login (returns list of organizations)
 func (h *AuthHandler) LoginGlobal(c *gin.Context) {
 	var req service.LoginGlobalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request data",
-			"errors":  err.Error(),
+		errors.SendErrorResponse(c, errors.ErrCodeValidationFailed, "Invalid request data", map[string]interface{}{
+			"details": err.Error(),
 		})
 		return
 	}
