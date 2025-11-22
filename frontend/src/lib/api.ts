@@ -23,28 +23,28 @@ import {
 // Auth API functions (use publicAPI for unauthenticated routes)
 export const authAPI = {
   login: (data: LoginRequest): Promise<LoginResponse> =>
-    publicAPI.post('/auth/login', data).then(res => res.data),
+    publicAPI.post('/v1/auth/login', data).then(res => res.data),
 
   register: (data: RegisterRequest): Promise<RegisterResponse> =>
-    publicAPI.post('/auth/register', data).then(res => res.data),
+    publicAPI.post('/v1/auth/register', data).then(res => res.data),
 
   selectOrganization: (data: SelectOrganizationRequest): Promise<SelectOrganizationResponse> =>
-    api.post('/auth/select-organization', data).then(res => res.data),
+    api.post('/v1/auth/select-organization', data).then(res => res.data),
 
   createOrganization: (data: CreateOrganizationRequest): Promise<CreateOrganizationResponse> =>
-    api.post('/auth/create-organization', data).then(res => res.data),
+    api.post('/v1/auth/create-organization', data).then(res => res.data),
 
   refreshToken: (data: RefreshTokenRequest): Promise<RefreshTokenResponse> =>
-    api.post('/auth/refresh', data).then(res => res.data),
+    api.post('/v1/auth/refresh', data).then(res => res.data),
 
   logout: (): Promise<ApiSuccess> =>
     api.post('/user/logout').then(res => res.data),
 
   forgotPassword: (data: ForgotPasswordRequest): Promise<ApiSuccess> =>
-    publicAPI.post('/auth/forgot-password', data).then(res => res.data),
+    publicAPI.post('/v1/auth/forgot-password', data).then(res => res.data),
 
   resetPassword: (data: ResetPasswordRequest): Promise<ApiSuccess> =>
-    publicAPI.post('/auth/reset-password', data).then(res => res.data),
+    publicAPI.post('/v1/auth/reset-password', data).then(res => res.data),
 
   acceptInvitation: (token: string): Promise<ApiSuccess> =>
     api.post(`/invitations/${token}/accept`).then(res => res.data),
@@ -262,7 +262,7 @@ export const oauthAuditAPI = {
 // Health check
 export const healthAPI = {
   check: () => {
-    const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8080'
+    const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
     return api.get(`${baseURL}/health`, {
       withCredentials: true,
       headers: {

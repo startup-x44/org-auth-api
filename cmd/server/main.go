@@ -315,6 +315,9 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 	csrfConfig := middleware.DefaultCSRFConfig(cfg.JWT.Secret, cfg.Environment == "production")
 	csrfConfig.SkipPaths = []string{
 		"/api/v1/oauth/token",
+		"/api/v1/auth/login",
+		"/api/v1/auth/register",
+		"/api/v1/auth/refresh",
 	}
 	router.Use(middleware.CSRFMiddleware(csrfConfig))
 

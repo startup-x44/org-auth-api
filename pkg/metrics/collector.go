@@ -92,11 +92,11 @@ func (c *Collector) collectRedisMetrics(ctx context.Context) {
 
 // collectTokenMetrics collects active token counts
 func (c *Collector) collectTokenMetrics(ctx context.Context) {
-	// Count active refresh tokens
+	// Count active refresh tokens (not revoked and not expired)
 	var refreshTokenCount int64
 	if err := c.db.WithContext(ctx).
 		Table("refresh_tokens").
-		Where("revoked = ? AND expires_at > ?", false, time.Now()).
+		Where("revoked_at IS NULL AND expires_at > ?", time.Now()).
 		Count(&refreshTokenCount).Error; err != nil {
 		logger.Error(ctx).Err(err).Msg("Failed to count active refresh tokens")
 	} else {
@@ -122,7 +122,7 @@ func (c *Collector) collectOrganizationMetrics(ctx context.Context) {
 	// Count total organization members
 	var memberCount int64
 	if err := c.db.WithContext(ctx).
-		Table("organization_members").
+		Table("organization_memberships").
 		Count(&memberCount).Error; err != nil {
 		logger.Error(ctx).Err(err).Msg("Failed to count organization members")
 	} else {
@@ -136,7 +136,7 @@ func (c *Collector) collectSessionMetrics(ctx context.Context) {
 	var activeSessionCount int64
 	if err := c.db.WithContext(ctx).
 		Table("refresh_tokens").
-		Where("revoked = ? AND expires_at > ?", false, time.Now()).
+		Where("revoked_at IS NULL AND expires_at > ?", time.Now()).
 		Count(&activeSessionCount).Error; err != nil {
 		logger.Error(ctx).Err(err).Msg("Failed to count active sessions")
 	} else {
@@ -146,11 +146,11 @@ func (c *Collector) collectSessionMetrics(ctx context.Context) {
 
 // collectAPIKeyMetrics collects API key metrics
 func (c *Collector) collectAPIKeyMetrics(ctx context.Context) {
-	// Count active API keys
+	// Count active API keys (not revoked and not expired)
 	var apiKeyCount int64
 	if err := c.db.WithContext(ctx).
 		Table("api_keys").
-		Where("is_active = ? AND (expires_at IS NULL OR expires_at > ?)", true, time.Now()).
+		Where("(revoked = false OR revoked IS NULL) AND (expires_at IS NULL OR expires_at > ?)", time.Now()).
 		Count(&apiKeyCount).Error; err != nil {
 		logger.Error(ctx).Err(err).Msg("Failed to count active API keys")
 	} else {

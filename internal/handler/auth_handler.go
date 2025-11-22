@@ -90,9 +90,15 @@ func (h *AuthHandler) LoginGlobal(c *gin.Context) {
 		action = models.ActionLoginFailed
 	}
 
+	// Safely get organizations count
+	orgCount := 0
+	if response != nil && response.Organizations != nil {
+		orgCount = len(response.Organizations)
+	}
+
 	h.auditService.LogAuth(c.Request.Context(), action, userID, err == nil, map[string]interface{}{
 		"email":               req.Email,
-		"organizations_count": len(response.Organizations),
+		"organizations_count": orgCount,
 	}, err)
 
 	if err != nil {
@@ -103,10 +109,16 @@ func (h *AuthHandler) LoginGlobal(c *gin.Context) {
 		return
 	}
 
+	// Different message based on whether user is superadmin (has token) or needs to select org
+	message := "Login successful. Please select an organization."
+	if response != nil && response.Token != nil && response.Token.AccessToken != "" {
+		message = "Login successful. Welcome back, superadmin!"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    response,
-		"message": "Login successful. Please select an organization.",
+		"message": message,
 	})
 }
 

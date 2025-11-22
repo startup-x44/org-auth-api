@@ -118,8 +118,8 @@ api.interceptors.response.use(
     // Handle 401 errors
     if (error.response?.status === 401) {
       // Don't logout on login/register endpoints
-      const isAuthEndpoint = error.config?.url?.includes('/auth/login') || 
-                            error.config?.url?.includes('/auth/register')
+      const isAuthEndpoint = error.config?.url?.includes('/v1/auth/login') || 
+                            error.config?.url?.includes('/v1/auth/register')
       
       if (isAuthEndpoint) {
         // Just return the error for auth endpoints (let component handle it)

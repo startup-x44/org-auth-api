@@ -12,6 +12,38 @@ import (
 	"auth-service/internal/service"
 )
 
+// ResourcePolicy defines access control policies for different resource types
+type ResourcePolicy struct {
+	// Administrative resources that superadmin can bypass (admin-only functions)
+	AdminResources []string
+	// Role-specific resources that require exact role match (no superadmin bypass)
+	RoleSpecificResources []string
+	// User-facing resources that follow role hierarchy
+	UserResources []string
+}
+
+// DefaultResourcePolicy returns the default resource access policy
+func DefaultResourcePolicy() *ResourcePolicy {
+	return &ResourcePolicy{
+		AdminResources: []string{
+			"admin:", "system:", "rbac:", "client-apps:", "audit:",
+			"users:create", "users:update", "users:delete", "users:activate", "users:deactivate",
+			"organizations:create", "organizations:update", "organizations:delete",
+			"roles:create", "roles:update", "roles:delete", "roles:assign",
+			"permissions:create", "permissions:update", "permissions:delete",
+		},
+		RoleSpecificResources: []string{
+			"role:user", "role:member", "role:admin", "role:superadmin",
+			"dashboard:user", "dashboard:member", "dashboard:admin",
+			"access:user-routes", "access:member-routes",
+		},
+		UserResources: []string{
+			"profile:", "settings:", "notifications:", "user:read",
+			"member:view", "organization:view",
+		},
+	}
+}
+
 // AuthMiddleware handles JWT authentication
 type AuthMiddleware struct {
 	authService service.AuthService
@@ -26,7 +58,204 @@ func NewAuthMiddleware(authService service.AuthService, repo repository.Reposito
 	}
 }
 
+// canAccessResource implements the unified policy logic for resource access control
+func (m *AuthMiddleware) canAccessResource(c *gin.Context, resource string, policy *ResourcePolicy) bool {
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+
+	// Get user permissions and roles from token
+	token := m.extractToken(c)
+	if token == "" {
+		return false
+	}
+
+	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+	if err != nil {
+		return false
+	}
+
+	// 1. Check if it's a role-specific resource (strict matching required)
+	for _, roleResource := range policy.RoleSpecificResources {
+		if strings.HasPrefix(resource, roleResource) {
+			// For role-specific resources, check exact permission match
+			// SuperAdmin CANNOT bypass role-specific permissions
+			return m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 2. Check if it's an administrative resource (superadmin bypass allowed)
+	for _, adminResource := range policy.AdminResources {
+		if strings.HasPrefix(resource, adminResource) {
+			// SuperAdmin can bypass admin resources
+			if isSuperadmin {
+				return true
+			}
+			// Non-superadmin must have the specific permission
+			return m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 3. Check if it's a user resource (role hierarchy applies)
+	for _, userResource := range policy.UserResources {
+		if strings.HasPrefix(resource, userResource) {
+			// Check role hierarchy: superadmin > admin > member > user
+			return m.hasRoleHierarchyAccess(claims.Roles, resource) ||
+				m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 4. Default: check exact permission match (no superadmin bypass)
+	return m.hasExactPermission(claims.Permissions, resource)
+}
+
+// hasExactPermission checks if user has the specific permission
+func (m *AuthMiddleware) hasExactPermission(permissions []string, required string) bool {
+	for _, p := range permissions {
+		if p == required {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRole checks if user has a specific role
+func (m *AuthMiddleware) hasRole(c *gin.Context, requiredRole string) bool {
+	token := m.extractToken(c)
+	if token == "" {
+		return false
+	}
+
+	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+	if err != nil {
+		return false
+	}
+
+	for _, role := range claims.Roles {
+		if role == requiredRole {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRoleHierarchyAccess checks role hierarchy for user-facing resources
+func (m *AuthMiddleware) hasRoleHierarchyAccess(userRoles []string, resource string) bool {
+	// Define role hierarchy: superadmin > admin > member > user
+	roleHierarchy := map[string]int{
+		"superadmin": 4,
+		"admin":      3,
+		"member":     2,
+		"user":       1,
+	}
+
+	// Get the highest role level for the user
+	userLevel := 0
+	for _, role := range userRoles {
+		if level, exists := roleHierarchy[role]; exists && level > userLevel {
+			userLevel = level
+		}
+	}
+
+	// Determine required level based on resource
+	requiredLevel := 1 // default to user level
+	if strings.Contains(resource, "admin") {
+		requiredLevel = 3
+	} else if strings.Contains(resource, "member") {
+		requiredLevel = 2
+	}
+
+	return userLevel >= requiredLevel
+}
+
+// canAccessResource implements the unified policy logic for resource access
+func (m *AuthMiddleware) canAccessResource(c *gin.Context, resource string, policy *ResourcePolicy) bool {
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+
+	// Extract user info from context
+	token := m.extractToken(c)
+	if token == "" {
+		return false
+	}
+
+	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+	if err != nil {
+		return false
+	}
+
+	// 1. Check if it's a role-specific resource (strict matching required - NO superadmin bypass)
+	for _, roleResource := range policy.RoleSpecificResources {
+		if strings.HasPrefix(resource, roleResource) {
+			// For role-specific resources, check exact permission match only
+			return m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 2. Check if it's an administrative resource (superadmin bypass allowed)
+	for _, adminResource := range policy.AdminResources {
+		if strings.HasPrefix(resource, adminResource) {
+			// SuperAdmin can bypass admin resources
+			if isSuperadmin {
+				return true
+			}
+			// Non-superadmin must have the specific permission
+			return m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 3. Check if it's a user resource (role hierarchy applies)
+	for _, userResource := range policy.UserResources {
+		if strings.HasPrefix(resource, userResource) {
+			// Check role hierarchy or exact permission
+			return m.hasRoleHierarchyAccess(claims, resource) ||
+				m.hasExactPermission(claims.Permissions, resource)
+		}
+	}
+
+	// 4. Default: check exact permission match (no superadmin bypass)
+	return m.hasExactPermission(claims.Permissions, resource)
+}
+
+// hasExactPermission checks if user has the specific permission
+func (m *AuthMiddleware) hasExactPermission(permissions []string, required string) bool {
+	for _, p := range permissions {
+		if p == required {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRole checks if user has a specific role
+func (m *AuthMiddleware) hasRole(c *gin.Context, role string) bool {
+	token := m.extractToken(c)
+	if token == "" {
+		return false
+	}
+
+	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
+	if err != nil {
+		return false
+	}
+
+	// Check if user has the specific role
+	for _, userRole := range claims.Roles {
+		if userRole == role {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRoleHierarchyAccess checks role hierarchy for user resources
+// Hierarchy: superadmin > admin > member > user
+func (m *AuthMiddleware) hasRoleHierarchyAccess(claims interface{}, resource string) bool {
+	// This is a placeholder for role hierarchy logic
+	// You can implement specific hierarchy rules here based on your needs
+	// For now, we'll rely on exact permission matching
+	return false
+}
+
 // AuthRequired middleware requires valid JWT token
+// NO superadmin bypass here - just validates token and sets context
 func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := m.extractToken(c)
@@ -49,12 +278,14 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 			return
 		}
 
-		// Set user context
+		// Set comprehensive user context for policy checks
 		ctx := context.WithValue(c.Request.Context(), "user_id", claims.UserID)
 		ctx = context.WithValue(ctx, "user_email", claims.Email)
 		ctx = context.WithValue(ctx, "organization_id", claims.OrganizationID)
 		ctx = context.WithValue(ctx, "organization_role", claims.OrganizationRole)
 		ctx = context.WithValue(ctx, "is_superadmin", claims.IsSuperadmin)
+		ctx = context.WithValue(ctx, "permissions", claims.Permissions)
+		ctx = context.WithValue(ctx, "roles", claims.Roles)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
