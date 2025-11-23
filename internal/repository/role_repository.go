@@ -107,15 +107,17 @@ func (r *roleRepository) GetByOrganization(ctx context.Context, orgID string, is
 
 	if isSuperAdmin {
 		// SuperAdmin: Return both system roles AND custom org roles
+		// NOTE: Don't preload Permissions here - let the service layer fetch them properly
+		// using GetRolePermissionsWithOrganization which correctly queries role_permissions join table
 		err = r.db.WithContext(ctx).
-			Preload("Permissions", "organization_id = ? OR (is_system = TRUE AND organization_id IS NULL)", orgUUID).
 			Where("(is_system = ? AND organization_id IS NULL) OR organization_id = ?", true, orgUUID).
 			Order("is_system DESC, name ASC").
 			Find(&roles).Error
 	} else {
 		// Regular user: Only return custom org roles (is_system=false)
+		// NOTE: Don't preload Permissions here - let the service layer fetch them properly
+		// using GetRolePermissionsWithOrganization which correctly queries role_permissions join table
 		err = r.db.WithContext(ctx).
-			Preload("Permissions", "organization_id = ?", orgUUID).
 			Where("organization_id = ? AND is_system = ?", orgUUID, false).
 			Order("name ASC").
 			Find(&roles).Error

@@ -89,8 +89,9 @@ func (s *revocationService) IsTokenRevoked(ctx context.Context, tokenString stri
 	// Parse token to get JTI
 	claims, err := s.jwtService.ValidateToken(tokenString)
 	if err != nil {
-		// Invalid token is considered revoked
-		return true, nil
+		// If token is invalid/expired, return false with error
+		// Let the auth middleware handle token validation errors
+		return false, err
 	}
 
 	if claims.ID == "" {

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorization Error</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        .error-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            background: #fed7d7;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+        }
+        
+        h1 {
+            font-size: 28px;
+            color: #1a202c;
+            margin-bottom: 12px;
+        }
+        
+        .error-code {
+            display: inline-block;
+            background: #fed7d7;
+            color: #c53030;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            font-family: monospace;
+        }
+        
+        .error-description {
+            color: #4a5568;
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+        
+        .error-details {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+            text-align: left;
+        }
+        
+        .error-details h3 {
+            font-size: 14px;
+            color: #2d3748;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        
+        .error-details ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .error-details li {
+            font-size: 14px;
+            color: #4a5568;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .error-details li:last-child {
+            border-bottom: none;
+        }
+        
+        .error-details strong {
+            color: #2d3748;
+            display: inline-block;
+            min-width: 120px;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 12px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #2d3748;
+            margin-left: 12px;
+        }
+        
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+        
+        .footer {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 13px;
+            color: #718096;
+        }
+        
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        /* Common error messages */
+        .help-text {
+            background: #edf2f7;
+            border-left: 4px solid #4299e1;
+            padding: 16px;
+            margin: 20px 0;
+            text-align: left;
+            border-radius: 4px;
+        }
+        
+        .help-text h4 {
+            color: #2c5282;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .help-text p {
+            color: #2d3748;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        @media (max-width: 480px) {
+            .container {
+                padding: 30px 24px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            .btn {
+                display: block;
+                width: 100%;
+                margin: 8px 0;
+            }
+            
+            .btn-secondary {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-icon">❌</div>
+        
+        <h1>Authorization Failed</h1>
+        
+        {{if .error}}
+        <div class="error-code">{{ .error }}</div>
+        {{end}}
+        
+        <p class="error-description">
+            {{if .description}}
+                {{ .description }}
+            {{else}}
+                An error occurred during the authorization process. Please try again or contact support.
+            {{end}}
+        </p>
+        
+        {{if .error}}
+        <div class="error-details">
+            <h3>Error Details</h3>
+            <ul>
+                <li><strong>Error Code:</strong> {{ .error }}</li>
+                {{if .description}}
+                <li><strong>Description:</strong> {{ .description }}</li>
+                {{end}}
+                {{if .error_uri}}
+                <li><strong>More Info:</strong> <a href="{{ .error_uri }}" target="_blank">{{ .error_uri }}</a></li>
+                {{end}}
+            </ul>
+        </div>
+        {{end}}
+        
+        {{if eq .error "invalid_client"}}
+        <div class="help-text">
+            <h4>💡 What does this mean?</h4>
+            <p>The application you're trying to access is not properly registered or the redirect URL doesn't match. Please contact the application owner.</p>
+        </div>
+        {{else if eq .error "access_denied"}}
+        <div class="help-text">
+            <h4>💡 What does this mean?</h4>
+            <p>You don't have permission to access this application. Make sure you're a member of the correct organization.</p>
+        </div>
+        {{else if eq .error "invalid_scope"}}
+        <div class="help-text">
+            <h4>💡 What does this mean?</h4>
+            <p>The application is requesting permissions that are not allowed. Please contact the application owner.</p>
+        </div>
+        {{else if eq .error "invalid_request"}}
+        <div class="help-text">
+            <h4>💡 What does this mean?</h4>
+            <p>The authorization request is missing required parameters or contains invalid values. This is usually a configuration issue with the application.</p>
+        </div>
+        {{else if eq .error "server_error"}}
+        <div class="help-text">
+            <h4>💡 What does this mean?</h4>
+            <p>Something went wrong on our end. Please try again in a few moments. If the problem persists, contact support.</p>
+        </div>
+        {{end}}
+        
+        <div style="margin-top: 30px;">
+            <a href="javascript:history.back()" class="btn btn-primary">Go Back</a>
+            <a href="/" class="btn btn-secondary">Return Home</a>
+        </div>
+        
+        <div class="footer">
+            Need help? <a href="/support">Contact Support</a>
+        </div>
+    </div>
+</body>
+</html>

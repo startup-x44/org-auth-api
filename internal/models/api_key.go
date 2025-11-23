@@ -9,20 +9,20 @@ import (
 
 // APIKey represents an API key for programmatic access
 type APIKey struct {
-	ID           uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	KeyID        string     `gorm:"uniqueIndex;not null" json:"key_id"`        // Public identifier (ak_...)
-	HashedSecret string     `gorm:"not null" json:"-"`                         // Hashed secret, never returned in API
-	Name         string     `gorm:"not null" json:"name"`                      // Human-readable name
-	Description  string     `json:"description"`                               // Optional description
-	ClientAppID  *uuid.UUID `gorm:"type:uuid;index" json:"client_app_id"`      // Optional: link to OAuth client app
-	UserID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`   // Owner of the API key
-	TenantID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"tenant_id"` // Tenant isolation
-	Scopes       string     `gorm:"type:text" json:"scopes"`                   // JSON array of allowed scopes
-	ExpiresAt    *time.Time `json:"expires_at"`                                // Optional expiration
-	Revoked      bool       `gorm:"default:false" json:"revoked"`              // Revocation status
-	LastUsedAt   *time.Time `json:"last_used_at"`                              // Track usage
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID             uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	KeyID          string     `gorm:"uniqueIndex;not null" json:"key_id"`              // Public identifier (ak_...)
+	HashedSecret   string     `gorm:"not null" json:"-"`                               // Hashed secret, never returned in API
+	Name           string     `gorm:"not null" json:"name"`                            // Human-readable name
+	Description    string     `json:"description"`                                     // Optional description
+	ClientAppID    *uuid.UUID `gorm:"type:uuid;index" json:"client_app_id"`            // Optional: link to OAuth client app
+	UserID         uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`         // Owner of the API key
+	OrganizationID uuid.UUID  `gorm:"type:uuid;not null;index" json:"organization_id"` // Organization isolation
+	Scopes         string     `gorm:"type:text" json:"scopes"`                         // JSON array of allowed scopes
+	ExpiresAt      *time.Time `json:"expires_at"`                                      // Optional expiration
+	Revoked        bool       `gorm:"default:false" json:"revoked"`                    // Revocation status
+	LastUsedAt     *time.Time `json:"last_used_at"`                                    // Track usage
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 
 	// Relationships
 	User      User       `gorm:"foreignKey:UserID" json:"user,omitempty"`

@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth2 Callback - Authorization Successful</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+            animation: slideIn 0.4s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            font-size: 48px;
+            color: white;
+        }
+
+        h1 {
+            text-align: center;
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #718096;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+
+        .info-section {
+            background: #f7fafc;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #4a5568;
+            margin-bottom: 8px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-value {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #2d3748;
+            word-break: break-all;
+            border: 1px solid #e2e8f0;
+        }
+
+        .code-display {
+            background: #1a202c;
+            color: #68d391;
+            padding: 16px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+            margin-top: 8px;
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #4299e1;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: #3182ce;
+        }
+
+        .copy-btn.copied {
+            background: #48bb78;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            text-decoration: none;
+            text-align: center;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+
+        .error-message {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c53030;
+        }
+
+        .params-grid {
+            display: grid;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .url-display {
+            background: #f7fafc;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #718096;
+            word-break: break-all;
+            margin-bottom: 20px;
+            border: 1px solid #e2e8f0;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 30px 20px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .actions {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-icon" id="statusIcon">✓</div>
+        
+        <h1 id="title">Authorization Successful!</h1>
+        <p class="subtitle" id="subtitle">You have successfully authorized the application</p>
+
+        <!-- Full Callback URL -->
+        <div class="url-display" id="fullUrl"></div>
+
+        <!-- Error Display (if any) -->
+        <div id="errorSection" style="display: none;">
+            <div class="error-message">
+                <strong>Error:</strong> <span id="errorCode"></span><br>
+                <span id="errorDescription"></span>
+            </div>
+        </div>
+
+        <!-- Authorization Code Display -->
+        <div id="codeSection" style="display: none;">
+            <div class="info-section">
+                <div class="info-label">Authorization Code</div>
+                <div class="code-display">
+                    <button class="copy-btn" onclick="copyCode()">Copy</button>
+                    <div id="authCode"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- All Parameters -->
+        <div class="info-section">
+            <div class="info-label">Callback Parameters</div>
+            <div class="params-grid" id="paramsGrid"></div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button class="btn btn-secondary" onclick="window.close()">Close Window</button>
+            <a href="/oauth-test" class="btn btn-primary">Back to OAuth Test</a>
+        </div>
+    </div>
+
+    <script>
+        // Parse URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const params = {};
+        
+        for (const [key, value] of urlParams.entries()) {
+            params[key] = value;
+        }
+
+        // Display full callback URL
+        document.getElementById('fullUrl').textContent = window.location.href;
+
+        // Check if there's an error
+        if (params.error) {
+            document.getElementById('statusIcon').textContent = '✕';
+            document.getElementById('statusIcon').style.background = 'linear-gradient(135deg, #f56565 0%, #c53030 100%)';
+            document.getElementById('title').textContent = 'Authorization Failed';
+            document.getElementById('subtitle').textContent = 'There was a problem with the authorization';
+            
+            document.getElementById('errorSection').style.display = 'block';
+            document.getElementById('errorCode').textContent = params.error;
+            document.getElementById('errorDescription').textContent = params.error_description || 'No description provided';
+        } else if (params.code) {
+            // Success - show authorization code
+            document.getElementById('codeSection').style.display = 'block';
+            document.getElementById('authCode').textContent = params.code;
+        }
+
+        // Display all parameters
+        const paramsGrid = document.getElementById('paramsGrid');
+        console.log('Params:', params);
+        console.log('Params count:', Object.keys(params).length);
+        
+        if (Object.keys(params).length === 0) {
+            paramsGrid.innerHTML = '<div class="info-value" style="text-align: center; color: #a0aec0;">No parameters received</div>';
+        } else {
+            for (const [key, value] of Object.entries(params)) {
+                const paramDiv = document.createElement('div');
+                paramDiv.innerHTML = `
+                    <div class="info-label">${key}</div>
+                    <div class="info-value">${value}</div>
+                `;
+                paramsGrid.appendChild(paramDiv);
+            }
+        }
+
+        // Copy code function
+        function copyCode() {
+            const code = document.getElementById('authCode').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // Store code in localStorage for the test page
+        if (params.code) {
+            localStorage.setItem('oauth_auth_code', params.code);
+            if (params.state) {
+                localStorage.setItem('oauth_state_received', params.state);
+            }
+        }
+
+        // Auto-close after 10 seconds if this was opened in a popup
+        if (window.opener) {
+            let countdown = 10;
+            const countdownText = document.createElement('p');
+            countdownText.style.textAlign = 'center';
+            countdownText.style.marginTop = '20px';
+            countdownText.style.color = '#718096';
+            countdownText.style.fontSize = '14px';
+            document.querySelector('.container').appendChild(countdownText);
+            
+            const interval = setInterval(() => {
+                countdown--;
+                countdownText.textContent = `Window will close automatically in ${countdown} seconds...`;
+                
+                if (countdown <= 0) {
+                    clearInterval(interval);
+                    window.close();
+                }
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

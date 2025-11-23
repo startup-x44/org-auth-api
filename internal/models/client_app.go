@@ -13,6 +13,7 @@ type ClientApp struct {
 	Name           string         `gorm:"type:varchar(255);not null" json:"name"`
 	ClientID       string         `gorm:"type:varchar(255);uniqueIndex;not null" json:"client_id"`
 	ClientSecret   string         `gorm:"type:varchar(255);not null" json:"-"` // bcrypt hashed
+	OrganizationID uuid.UUID      `gorm:"type:uuid;not null;index" json:"organization_id"`
 	RedirectURIs   pq.StringArray `gorm:"type:text[]" json:"redirect_uris"`
 	AllowedOrigins pq.StringArray `gorm:"type:text[]" json:"allowed_origins"`
 	AllowedScopes  pq.StringArray `gorm:"type:text[]" json:"allowed_scopes"`

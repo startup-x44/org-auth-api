@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -339,6 +340,43 @@ func (h *RoleHandler) ListPermissions(c *gin.Context) {
 }
 
 // ------------------------
+// Permissions: GET ROLE PERMISSIONS
+// ------------------------
+
+func (h *RoleHandler) GetRolePermissions(c *gin.Context) {
+	orgID := c.Param("orgId")
+	roleUUID, orgUUID, err := h.parseUUIDs(c)
+	if err != nil {
+		return
+	}
+
+	if !h.checkPermission(c, orgID, "role:view") {
+		h.logAuthorizationFailure(c, models.ResourcePermission, &roleUUID, &orgUUID, "role:view")
+		h.errorResponse(c, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	permissions, err := h.authService.RoleService().GetRolePermissionsWithOrganization(c.Request.Context(), roleUUID, orgUUID)
+
+	userID, _ := h.getUserID(c)
+	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionView, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
+		"role_id": roleUUID.String(),
+		"count":   len(permissions),
+	}, err)
+
+	if err != nil {
+		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to get role permissions")
+		h.errorResponse(c, http.StatusNotFound, "Failed to get role permissions")
+		return
+	}
+
+	h.successResponse(c, http.StatusOK, "", gin.H{
+		"permissions": permissions,
+		"count":       len(permissions),
+	})
+}
+
+// ------------------------
 // Permissions: ASSIGN
 // ------------------------
 
@@ -356,28 +394,101 @@ func (h *RoleHandler) AssignPermissions(c *gin.Context) {
 	}
 
 	var req struct {
-		Permissions []string `json:"permissions"`
+		Permissions   []string `json:"permissions"`
+		PermissionIDs []string `json:"permission_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.errorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
-	err = h.authService.RoleService().AssignPermissionsToRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, req.Permissions)
+	// Support both permission names and permission IDs
+	var permissionNames []string
+
+	if len(req.PermissionIDs) > 0 {
+		// Get all available permissions for this organization once
+		allPerms, err := h.authService.RoleService().ListAllPermissionsForOrganization(c.Request.Context(), orgUUID)
+		if err != nil {
+			h.errorResponse(c, http.StatusInternalServerError, "Failed to load permissions")
+			return
+		}
+
+		// Convert permission IDs to permission names
+		for _, permID := range req.PermissionIDs {
+			// Validate UUID format
+			_, err := uuid.Parse(permID)
+			if err != nil {
+				h.errorResponse(c, http.StatusBadRequest, fmt.Sprintf("Invalid permission ID format: %s", permID))
+				return
+			}
+
+			// Find the permission with this ID
+			var foundPerm *service.PermissionResponse
+			for _, perm := range allPerms {
+				if perm.ID.String() == permID {
+					foundPerm = perm
+					break
+				}
+			}
+
+			if foundPerm == nil {
+				h.errorResponse(c, http.StatusBadRequest, fmt.Sprintf("Permission not found: %s", permID))
+				return
+			}
+
+			permissionNames = append(permissionNames, foundPerm.Name)
+		}
+	} else if len(req.Permissions) > 0 {
+		permissionNames = req.Permissions
+	} else {
+		h.errorResponse(c, http.StatusBadRequest, "No permissions or permission_ids provided")
+		return
+	}
+
+	logger.Info(c.Request.Context()).
+		Str("role_id", roleUUID.String()).
+		Str("org_id", orgUUID.String()).
+		Strs("permissions", permissionNames).
+		Msg("Attempting to assign permissions to role")
+
+	err = h.authService.RoleService().AssignPermissionsToRoleWithOrganization(c.Request.Context(), roleUUID, orgUUID, permissionNames)
 
 	userID, _ := h.getUserID(c)
 	h.auditService.LogPermission(c.Request.Context(), models.ActionPermissionGrant, *userID, &roleUUID, &orgUUID, err == nil, map[string]interface{}{
 		"role_id":     roleUUID.String(),
-		"permissions": req.Permissions,
+		"permissions": permissionNames,
 	}, err)
 
 	if err != nil {
-		logger.Error(c.Request.Context()).Err(err).Str("role_id", roleUUID.String()).Msg("Failed to assign permissions")
-		h.errorResponse(c, http.StatusUnprocessableEntity, "Failed to assign permissions")
+		logger.Error(c.Request.Context()).
+			Err(err).
+			Str("role_id", roleUUID.String()).
+			Str("org_id", orgUUID.String()).
+			Strs("permissions", permissionNames).
+			Msg("Failed to assign permissions")
+		h.errorResponse(c, http.StatusUnprocessableEntity, fmt.Sprintf("Failed to assign permissions: %v", err))
 		return
 	}
 
-	h.successResponse(c, http.StatusOK, "Permissions assigned", nil)
+	logger.Info(c.Request.Context()).
+		Str("role_id", roleUUID.String()).
+		Str("org_id", orgUUID.String()).
+		Strs("permissions", permissionNames).
+		Msg("Successfully assigned permissions to role")
+
+	// Verify the assignment by checking if permissions were actually assigned
+	assignedPerms, checkErr := h.authService.RoleService().GetRolePermissionsWithOrganization(c.Request.Context(), roleUUID, orgUUID)
+	if checkErr == nil {
+		logger.Info(c.Request.Context()).
+			Str("role_id", roleUUID.String()).
+			Strs("assigned_permissions", assignedPerms).
+			Msg("Verification: Current permissions after assignment")
+	}
+
+	h.successResponse(c, http.StatusOK, "Permissions assigned successfully", gin.H{
+		"assigned_count": len(permissionNames),
+		"permissions":    permissionNames,
+	})
 }
 
 // ------------------------

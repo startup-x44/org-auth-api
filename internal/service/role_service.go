@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"auth-service/internal/models"
@@ -94,7 +95,7 @@ type RoleResponse struct {
 	DisplayName    string     `json:"display_name"`
 	Description    string     `json:"description"`
 	IsSystem       bool       `json:"is_system"`
-	Permissions    []string   `json:"permissions,omitempty"`
+	Permissions    []string   `json:"permissions"`
 	MemberCount    int        `json:"member_count,omitempty"`
 }
 
@@ -271,9 +272,22 @@ func (s *roleService) GetRolesByOrganization(ctx context.Context, orgID uuid.UUI
 	for i, role := range roles {
 		responses[i] = s.convertToRoleResponse(role)
 
-		// Get permissions for each role
-		permissions, _ := s.GetRolePermissions(ctx, role.ID)
+		// Get permissions for each role using organization-scoped method
+		permissions, permErr := s.GetRolePermissionsWithOrganization(ctx, role.ID, orgID)
+		if permErr != nil {
+			logger.Warn(context.Background()).Err(permErr).
+				Str("role_id", role.ID.String()).
+				Str("org_id", orgID.String()).
+				Msg("Failed to get role permissions for role list")
+		}
 		responses[i].Permissions = permissions
+
+		logger.Debug(context.Background()).
+			Str("role_id", role.ID.String()).
+			Str("role_name", role.Name).
+			Strs("permissions", permissions).
+			Int("permission_count", len(permissions)).
+			Msg("Role permissions loaded for organization role list")
 
 		// Get member count
 		count, _ := s.repo.Role().CountMembersByRole(ctx, role.ID.String())
@@ -566,10 +580,8 @@ func (s *roleService) AssignPermissionsToRoleWithOrganization(ctx context.Contex
 	// STRICT VALIDATION: Custom roles can ONLY have custom permissions
 	// System roles can ONLY have system permissions (but this is blocked earlier)
 	for _, perm := range perms {
-		// RULE 1: Custom roles (is_system=false) can ONLY be assigned custom permissions (is_system=false)
-		if !role.IsSystem && perm.IsSystem {
-			return fmt.Errorf("cannot assign system permission '%s' to custom role - custom roles can only have custom permissions", perm.Name)
-		}
+		// RULE 1: Custom roles (is_system=false) can be assigned custom permissions OR system permissions
+		// We removed the restriction that prevented system permissions from being assigned to custom roles
 
 		// RULE 2: Custom permissions must belong to the same organization as the role
 		if !perm.IsSystem && (perm.OrganizationID == nil || *perm.OrganizationID != orgID) {
@@ -617,10 +629,32 @@ func (s *roleService) RevokePermissionsFromRoleWithOrganization(ctx context.Cont
 		return nil
 	}
 
-	// Revoke each permission (ignore errors if permission wasn't assigned)
+	// Revoke each permission with proper logging
+	revokedCount := 0
 	for _, perm := range perms {
-		_ = s.repo.Permission().RevokeFromRole(ctx, roleID, perm.ID)
+		if err := s.repo.Permission().RevokeFromRole(ctx, roleID, perm.ID); err != nil {
+			logger.Warn(ctx).Err(err).
+				Str("role_id", roleID.String()).
+				Str("permission_id", perm.ID.String()).
+				Str("permission_name", perm.Name).
+				Msg("Failed to revoke permission from role")
+		} else {
+			revokedCount++
+			logger.Info(ctx).
+				Str("role_id", roleID.String()).
+				Str("permission_id", perm.ID.String()).
+				Str("permission_name", perm.Name).
+				Msg("Successfully revoked permission from role")
+		}
 	}
+
+	logger.Info(ctx).
+		Str("role_id", roleID.String()).
+		Str("role_name", role.Name).
+		Int("requested_count", len(permissionNames)).
+		Int("found_count", len(perms)).
+		Int("revoked_count", revokedCount).
+		Msg("Permission revocation completed")
 
 	if s.auditLogger != nil {
 		s.auditLogger.LogOrganizationAction(userID, "revoke_permissions", orgID.String(), roleID.String(), "", true, nil, fmt.Sprintf("Revoked %d permissions from role %s", len(permissionNames), role.Name))
@@ -738,6 +772,34 @@ func (s *roleService) ListCustomPermissionsForOrganization(ctx context.Context, 
 // CreatePermissionForOrganization creates a new custom permission tied to an organization
 func (s *roleService) CreatePermissionForOrganization(ctx context.Context, orgID uuid.UUID, name, displayName, description, category string) (*PermissionResponse, error) {
 	userID := s.getUserID(ctx)
+
+	// Validate permission name format: action:resource (e.g., view:profile, edit:content)
+	// Must contain exactly one colon, with non-empty parts before and after
+	// Only lowercase letters and underscores allowed
+	if !strings.Contains(name, ":") {
+		return nil, errors.New("permission name must follow the format 'action:resource' (e.g., view:profile, edit:content)")
+	}
+
+	parts := strings.Split(name, ":")
+	if len(parts) != 2 {
+		return nil, errors.New("permission name must contain exactly one colon separating action and resource")
+	}
+
+	action, resource := parts[0], parts[1]
+	if action == "" || resource == "" {
+		return nil, errors.New("both action and resource parts must be non-empty in permission name")
+	}
+
+	// Validate characters: only lowercase letters and underscores
+	validNameRegex := `^[a-z_]+$`
+	matched, _ := regexp.MatchString(validNameRegex, action)
+	if !matched {
+		return nil, errors.New("action part must contain only lowercase letters and underscores")
+	}
+	matched, _ = regexp.MatchString(validNameRegex, resource)
+	if !matched {
+		return nil, errors.New("resource part must contain only lowercase letters and underscores")
+	}
 
 	// Check if a CUSTOM permission with this name already exists in THIS organization
 	// System permissions (is_system=true) don't conflict - users can create custom permissions with same name

@@ -146,6 +146,7 @@ func main() {
 	rbacHandler := handler.NewRBACHandler(authService.RoleService())
 	clientAppHandler := handler.NewClientAppHandler(clientAppService)
 	oauth2Handler := handler.NewOAuth2Handler(oauth2Service, clientAppService, userSvc)
+	oauth2ConsentHandler := handler.NewOAuth2ConsentHandler(oauth2Service, clientAppService, userSvc)
 	oauthAuditHandler := handler.NewOAuthAuditHandler(db)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	revocationHandler := handler.NewRevocationHandler(authService.RevocationService())
@@ -158,7 +159,7 @@ func main() {
 	revocationMiddleware := middleware.RevocationMiddleware(jwtService, authService.RevocationService())
 
 	// Initialize Gin router
-	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, roleHandler, rbacHandler, clientAppHandler, oauth2Handler, oauthAuditHandler, apiKeyHandler, revocationHandler, healthHandler, authMiddleware, organizationMiddleware, rateLimiter, revocationMiddleware)
+	router := setupRouter(cfg, authHandler, adminHandler, organizationHandler, roleHandler, rbacHandler, clientAppHandler, oauth2Handler, oauth2ConsentHandler, oauthAuditHandler, apiKeyHandler, revocationHandler, healthHandler, authMiddleware, organizationMiddleware, rateLimiter, revocationMiddleware)
 
 	// Start server
 	srv := &http.Server{
@@ -247,12 +248,21 @@ func runSeeders(db *gorm.DB) error {
 	return seeder.Seed(ctx)
 }
 
-func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, roleHandler *handler.RoleHandler, rbacHandler *handler.RBACHandler, clientAppHandler *handler.ClientAppHandler, oauth2Handler *handler.OAuth2Handler, oauthAuditHandler *handler.OAuthAuditHandler, apiKeyHandler *handler.APIKeyHandler, revocationHandler *handler.RevocationHandler, healthHandler *handler.HealthHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware, rateLimiter *middleware.RateLimiter, revocationMiddleware gin.HandlerFunc) *gin.Engine {
+func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHandler *handler.AdminHandler, organizationHandler *handler.OrganizationHandler, roleHandler *handler.RoleHandler, rbacHandler *handler.RBACHandler, clientAppHandler *handler.ClientAppHandler, oauth2Handler *handler.OAuth2Handler, oauth2ConsentHandler *handler.OAuth2ConsentHandler, oauthAuditHandler *handler.OAuthAuditHandler, apiKeyHandler *handler.APIKeyHandler, revocationHandler *handler.RevocationHandler, healthHandler *handler.HealthHandler, authMiddleware *middleware.AuthMiddleware, organizationMiddleware *middleware.OrganizationMiddleware, rateLimiter *middleware.RateLimiter, revocationMiddleware gin.HandlerFunc) *gin.Engine {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	router := gin.New()
+
+	// Load HTML templates for OAuth2 consent flow (if they exist)
+	// This is optional - templates are only needed for the traditional OAuth2 consent flow
+	if _, err := os.Stat("templates"); err == nil {
+		router.LoadHTMLGlob("templates/*.html")
+		fmt.Println("✅ Loaded HTML templates for OAuth2 consent flow")
+	} else {
+		fmt.Println("ℹ️  Templates directory not found - traditional OAuth2 consent flow will not be available")
+	}
 
 	// Global middleware - CRITICAL ORDER:
 	// 1. Recovery MUST be first to catch all panics
@@ -315,6 +325,7 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 	csrfConfig := middleware.DefaultCSRFConfig(cfg.JWT.Secret, cfg.Environment == "production")
 	csrfConfig.SkipPaths = []string{
 		"/api/v1/oauth/token",
+		"/api/v1/oauth/authorize", // OAuth consent form has its own CSRF token handling
 		"/api/v1/auth/login",
 		"/api/v1/auth/register",
 		"/api/v1/auth/refresh",
@@ -328,6 +339,16 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 
 	// Prometheus metrics endpoint
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// OAuth2 test page (development only)
+	router.GET("/oauth-test", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "oauth_test_traditional.html", nil)
+	})
+
+	// OAuth2 callback page - displays authorization code/error
+	router.GET("/oauth/callback", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "oauth_callback.html", nil)
+	})
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
@@ -388,6 +409,7 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 			org.DELETE("/:orgId/roles/:roleId", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:delete"), roleHandler.DeleteRole)
 
 			// Role permissions
+			org.GET("/:orgId/roles/:roleId/permissions", organizationMiddleware.MembershipRequired(""), roleHandler.GetRolePermissions)
 			org.POST("/:orgId/roles/:roleId/permissions", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:update"), roleHandler.AssignPermissions)
 			org.DELETE("/:orgId/roles/:roleId/permissions", organizationMiddleware.MembershipRequired(""), authMiddleware.RequirePermission("role:update"), roleHandler.RevokePermissions)
 
@@ -419,6 +441,9 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		admin.Use(authMiddleware.LoadUser())
 		admin.Use(authMiddleware.AdminRequired())
 		{
+			// Admin profile
+			admin.GET("/profile", adminHandler.GetAdminProfile)
+
 			// Global user management
 			admin.GET("/users", adminHandler.ListUsers)
 			admin.PUT("/users/:userId/activate", adminHandler.ActivateUser)
@@ -462,8 +487,12 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		// OAuth2 endpoints (public/authenticated as needed)
 		oauth := v1.Group("/oauth")
 		{
-			// Authorization endpoint (requires authentication)
-			oauth.GET("/authorize", authMiddleware.AuthRequired(), oauth2Handler.Authorize)
+			// Traditional OAuth2 consent flow (GET shows form, POST processes it)
+			oauth.GET("/authorize", oauth2ConsentHandler.ShowConsentForm)                                          // Show login/consent form
+			oauth.POST("/authorize", rateLimiter.ByIP(middleware.ScopeLogin), oauth2ConsentHandler.ProcessConsent) // Process form submission
+
+			// API-style authorization endpoint (for programmatic auth)
+			oauth.POST("/authorize-with-credentials", rateLimiter.ByIP(middleware.ScopeLogin), oauth2Handler.AuthorizeWithCredentials)
 
 			// Token endpoint (public - validates client credentials) with rate limiting
 			oauth.POST("/token", rateLimiter.ByIP(middleware.ScopeOAuth2Token), oauth2Handler.Token)
@@ -489,8 +518,10 @@ func setupRouter(cfg *config.Config, authHandler *handler.AuthHandler, adminHand
 		// Developer API endpoints (protected routes)
 		dev := v1.Group("/dev")
 		dev.Use(authMiddleware.AuthRequired())
+		dev.Use(authMiddleware.LoadUser()) // Load user object for handlers that use c.Get("user")
 		{
 			handler.RegisterAPIKeyRoutes(dev, apiKeyHandler)
+			handler.RegisterClientAppRoutes(dev, clientAppHandler)
 		}
 
 		// Token revocation endpoints (requires authentication)

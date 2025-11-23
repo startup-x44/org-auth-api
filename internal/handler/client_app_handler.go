@@ -23,6 +23,17 @@ func NewClientAppHandler(clientAppService service.ClientAppService) *ClientAppHa
 	}
 }
 
+// checkOwnerOrAdmin checks if user is superadmin or organization owner
+func checkOwnerOrAdmin(c *gin.Context) bool {
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+	if isSuperadmin {
+		return true
+	}
+
+	orgRole, _ := c.Request.Context().Value("organization_role").(string)
+	return orgRole == "owner"
+}
+
 // CreateClientApp godoc
 // @Summary Create a new OAuth2 client application (superadmin only)
 // @Tags client-apps
@@ -80,14 +91,30 @@ func (h *ClientAppHandler) CreateClientApp(c *gin.Context) {
 		return
 	}
 
-	// Check if superadmin
+	// Check if superadmin OR organization owner
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
-	if !isSuperadmin {
+	orgRole, _ := c.Request.Context().Value("organization_role").(string)
+
+	if !isSuperadmin && orgRole != "owner" {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "superadmin access required",
+			"message": "owner or superadmin access required",
 		})
 		return
+	}
+
+	// Get organization_id from context
+	var organizationID uuid.UUID
+	if orgIDVal := c.Request.Context().Value("organization_id"); orgIDVal != nil {
+		switch v := orgIDVal.(type) {
+		case uuid.UUID:
+			organizationID = v
+		case string:
+			parsed, err := uuid.Parse(v)
+			if err == nil {
+				organizationID = parsed
+			}
+		}
 	}
 
 	// Create minimal user object for service layer
@@ -106,7 +133,7 @@ func (h *ClientAppHandler) CreateClientApp(c *gin.Context) {
 		return
 	}
 
-	clientApp, plainSecret, err := h.clientAppService.CreateClientApp(c.Request.Context(), &req, user)
+	clientApp, plainSecret, err := h.clientAppService.CreateClientApp(c.Request.Context(), organizationID, &req, user)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -177,13 +204,16 @@ func (h *ClientAppHandler) ListClientApps(c *gin.Context) {
 			"message": "unauthorized - user_id not found in context",
 		})
 		return
-	} // Check if superadmin
+	}
+
+	// Check if superadmin OR organization owner
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
-	fmt.Printf("[DEBUG] is_superadmin value: %v\n", isSuperadmin)
-	if !isSuperadmin {
+	orgRole, _ := c.Request.Context().Value("organization_role").(string)
+
+	if !isSuperadmin && orgRole != "owner" {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "superadmin access required",
+			"message": "owner or superadmin access required",
 		})
 		return
 	}
@@ -246,6 +276,15 @@ func (h *ClientAppHandler) GetClientApp(c *gin.Context) {
 		return
 	}
 
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "owner or superadmin access required",
+		})
+		return
+	}
+
 	user := userVal.(*models.User)
 
 	idParam := c.Param("id")
@@ -296,6 +335,15 @@ func (h *ClientAppHandler) UpdateClientApp(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
 			"message": "unauthorized",
+		})
+		return
+	}
+
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "owner or superadmin access required",
 		})
 		return
 	}
@@ -362,6 +410,15 @@ func (h *ClientAppHandler) DeleteClientApp(c *gin.Context) {
 		return
 	}
 
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "owner or superadmin access required",
+		})
+		return
+	}
+
 	user := userVal.(*models.User)
 
 	idParam := c.Param("id")
@@ -409,6 +466,15 @@ func (h *ClientAppHandler) RotateClientSecret(c *gin.Context) {
 		return
 	}
 
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "owner or superadmin access required",
+		})
+		return
+	}
+
 	user := userVal.(*models.User)
 
 	idParam := c.Param("id")
@@ -435,4 +501,17 @@ func (h *ClientAppHandler) RotateClientSecret(c *gin.Context) {
 		"client_secret": newSecret,
 		"message":       "Client secret rotated successfully. Store the new secret securely, it will not be shown again.",
 	})
+}
+
+// RegisterClientAppRoutes registers all OAuth2 client app routes
+func RegisterClientAppRoutes(r *gin.RouterGroup, handler *ClientAppHandler) {
+	clientApps := r.Group("/client-apps")
+	{
+		clientApps.POST("", handler.CreateClientApp)
+		clientApps.GET("", handler.ListClientApps)
+		clientApps.GET("/:id", handler.GetClientApp)
+		clientApps.PUT("/:id", handler.UpdateClientApp)
+		clientApps.DELETE("/:id", handler.DeleteClientApp)
+		clientApps.POST("/:id/rotate-secret", handler.RotateClientSecret)
+	}
 }

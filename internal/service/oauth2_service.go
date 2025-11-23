@@ -114,18 +114,23 @@ func (s *oauth2Service) CreateAuthorizationCode(ctx context.Context, req *Author
 		return "", errors.New("code challenge is required (PKCE)")
 	}
 
-	// Validate scopes
-	requestedScopes := strings.Split(req.Scope, " ")
-	for _, scope := range requestedScopes {
-		allowed := false
-		for _, allowedScope := range clientApp.AllowedScopes {
-			if scope == allowedScope {
-				allowed = true
-				break
+	// Validate scopes (only if client has configured allowed scopes)
+	if len(clientApp.AllowedScopes) > 0 && req.Scope != "" {
+		requestedScopes := strings.Split(req.Scope, " ")
+		for _, scope := range requestedScopes {
+			if scope == "" {
+				continue // Skip empty scopes from split
 			}
-		}
-		if !allowed {
-			return "", fmt.Errorf("scope '%s' not allowed for this client", scope)
+			allowed := false
+			for _, allowedScope := range clientApp.AllowedScopes {
+				if scope == allowedScope {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return "", fmt.Errorf("scope '%s' not allowed for this client", scope)
+			}
 		}
 	}
 

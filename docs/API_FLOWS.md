@@ -1,5 +1,17 @@
 # API Workflows & Authentication Flows
 
+**Version**: 1.0.0  
+**Last Updated**: November 23, 2025  
+**OpenAPI Spec**: See [OPENAPI_SPEC.yaml](./OPENAPI_SPEC.yaml) for complete API documentation
+
+## Quick Links
+- [OpenAPI 3.0 Specification](./OPENAPI_SPEC.yaml)
+- [Authentication Flow](#authentication-flow-diagrams)
+- [API Endpoint Groups](#api-endpoint-groups)
+- [Sample Responses](#sample-api-responses)
+
+---
+
 ## Authentication Flow Diagrams
 
 ### 1. User Registration Flow
@@ -485,5 +497,578 @@ GET    /api/v1/oauth/audit/tokens (admin)
 
 ---
 
-**Last Updated**: November 18, 2025  
-**API Version**: v1
+## Sample API Responses
+
+### Success Response Structure
+```json
+{
+  "success": true,
+  "message": "Operation completed successfully",
+  "data": {
+    // Response payload varies by endpoint
+  }
+}
+```
+
+### Error Response Structure
+```json
+{
+  "success": false,
+  "error_code": "VALIDATION_FAILED",
+  "message": "Invalid request data",
+  "errors": {
+    "email": "Invalid email format",
+    "password": "Password must be at least 8 characters"
+  },
+  "request_id": "7e00ef6e-34fd-428b-9871-52e6689793aa",
+  "timestamp": "2025-11-23T06:33:09Z"
+}
+```
+
+### POST /auth/register
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!",
+  "confirm_password": "SecurePass123!",
+  "first_name": "John",
+  "last_name": "Doe",
+  "phone": "+1234567890"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "User registered successfully. Please create or join an organization.",
+  "data": {
+    "user": {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "email": "user@example.com",
+      "first_name": "John",
+      "last_name": "Doe",
+      "phone": "+1234567890",
+      "email_verified": false,
+      "is_active": true,
+      "is_admin": false,
+      "created_at": "2025-11-23T10:00:00Z",
+      "updated_at": "2025-11-23T10:00:00Z"
+    }
+  }
+}
+```
+
+### POST /auth/login
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!"
+}
+```
+
+**Response (200 OK) - Regular User:**
+```json
+{
+  "success": true,
+  "message": "Login successful. Please select an organization.",
+  "data": {
+    "user": {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "email": "user@example.com",
+      "first_name": "John",
+      "last_name": "Doe",
+      "email_verified": true,
+      "is_active": true,
+      "is_admin": false
+    },
+    "organizations": [
+      {
+        "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+        "organization_name": "Acme Corporation",
+        "organization_slug": "acme-corp",
+        "role": "owner",
+        "status": "active",
+        "joined_at": "2025-01-15T10:30:00Z"
+      },
+      {
+        "organization_id": "f8d12345-1234-5678-9abc-def012345678",
+        "organization_name": "Beta Inc",
+        "organization_slug": "beta-inc",
+        "role": "member",
+        "status": "active",
+        "joined_at": "2025-02-20T14:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Response (200 OK) - Superadmin:**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "user": {
+      "id": "admin-uuid",
+      "email": "admin@blocksure.io",
+      "is_admin": true
+    },
+    "token": {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "refresh_token": "rt_abc123def456...",
+      "token_type": "Bearer",
+      "expires_in": 900
+    }
+  }
+}
+```
+
+### POST /auth/select-organization
+**Request:**
+```json
+{
+  "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "email": "user@example.com",
+      "first_name": "John",
+      "last_name": "Doe"
+    },
+    "organization": {
+      "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+      "organization_name": "Acme Corporation",
+      "organization_slug": "acme-corp",
+      "role": "owner",
+      "status": "active"
+    },
+    "token": {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjNlNDU2Ny1lODliLTEyZDMtYTQ1Ni00MjY2MTQxNzQwMDAiLCJvcmdfaWQiOiJlZWFjYzQyNy1iOTFkLTRlMzgtYTRhNy02OTM3NWExYjg2MjgiLCJyb2xlIjoib3duZXIiLCJwZXJtaXNzaW9ucyI6WyIqIl0sImV4cCI6MTcwMDAwMDAwMH0...",
+      "refresh_token": "rt_def789ghi012...",
+      "token_type": "Bearer",
+      "expires_in": 900
+    }
+  }
+}
+```
+
+### POST /auth/refresh
+**Request:**
+```json
+{
+  "refresh_token": "rt_abc123def456..."
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "rt_new789xyz...",
+    "token_type": "Bearer",
+    "expires_in": 900
+  }
+}
+```
+
+### GET /user/profile
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "email": "user@example.com",
+    "first_name": "John",
+    "last_name": "Doe",
+    "phone": "+1234567890",
+    "address": "123 Main St, City",
+    "email_verified": true,
+    "is_active": true,
+    "is_admin": false,
+    "created_at": "2025-01-15T10:30:00Z",
+    "updated_at": "2025-11-20T14:22:00Z"
+  }
+}
+```
+
+### GET /organizations/{orgId}
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+    "name": "Acme Corporation",
+    "slug": "acme-corp",
+    "description": "Leading provider of enterprise solutions",
+    "status": "active",
+    "created_by": "123e4567-e89b-12d3-a456-426614174000",
+    "owner": {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "email": "owner@acme.com",
+      "name": "John Doe"
+    },
+    "member_count": 25,
+    "created_at": "2025-01-15T10:30:00Z",
+    "updated_at": "2025-11-20T14:22:00Z"
+  }
+}
+```
+
+### GET /organizations/{orgId}/members
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "email": "owner@acme.com",
+      "first_name": "John",
+      "last_name": "Doe",
+      "role": "owner",
+      "status": "active",
+      "joined_at": "2025-01-15T10:30:00Z"
+    },
+    {
+      "id": "234f5678-f89c-23e4-b567-537725285111",
+      "email": "manager@acme.com",
+      "first_name": "Jane",
+      "last_name": "Smith",
+      "role": "manager",
+      "status": "active",
+      "joined_at": "2025-02-01T09:15:00Z"
+    },
+    {
+      "id": "345g6789-g90d-34f5-c678-648836396222",
+      "email": "member@acme.com",
+      "first_name": "Bob",
+      "last_name": "Johnson",
+      "role": "member",
+      "status": "invited",
+      "joined_at": null
+    }
+  ]
+}
+```
+
+### POST /organizations/{orgId}/members (Invite)
+**Request:**
+```json
+{
+  "email": "newmember@example.com",
+  "role": "member"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Invitation sent successfully",
+  "data": {
+    "invitation_id": "inv-123abc-456def",
+    "email": "newmember@example.com",
+    "organization_name": "Acme Corporation",
+    "role_name": "Member",
+    "expires_at": "2025-11-30T23:59:59Z",
+    "status": "pending"
+  }
+}
+```
+
+### GET /invitations/{token} (Public)
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "email": "newmember@example.com",
+    "organization_name": "Acme Corporation",
+    "role_name": "Member",
+    "expires_at": "2025-11-30T23:59:59Z",
+    "status": "pending"
+  }
+}
+```
+
+### POST /invitations/{token}/accept
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Invitation accepted successfully",
+  "data": {
+    "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+    "role": "member",
+    "status": "active"
+  }
+}
+```
+
+### GET /organizations/{orgId}/roles
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "role-uuid-1",
+      "name": "owner",
+      "display_name": "Owner",
+      "description": "Full access to organization",
+      "is_system": true,
+      "organization_id": null,
+      "permissions": [
+        {
+          "id": "perm-uuid-1",
+          "name": "*",
+          "display_name": "All Permissions",
+          "category": "system"
+        }
+      ],
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "role-uuid-2",
+      "name": "manager",
+      "display_name": "Manager",
+      "description": "Can manage team members and projects",
+      "is_system": false,
+      "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+      "permissions": [
+        {
+          "id": "perm-uuid-2",
+          "name": "member:view",
+          "display_name": "View Members",
+          "category": "member"
+        },
+        {
+          "id": "perm-uuid-3",
+          "name": "member:invite",
+          "display_name": "Invite Members",
+          "category": "member"
+        },
+        {
+          "id": "perm-uuid-4",
+          "name": "project:create",
+          "display_name": "Create Projects",
+          "category": "project"
+        }
+      ],
+      "created_at": "2025-02-15T10:00:00Z",
+      "updated_at": "2025-11-20T14:30:00Z"
+    }
+  ]
+}
+```
+
+### GET /organizations/{orgId}/permissions
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "perm-uuid-1",
+      "name": "member:view",
+      "display_name": "View Members",
+      "description": "View organization members and their details",
+      "category": "member",
+      "is_system": true,
+      "organization_id": null,
+      "created_at": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "perm-uuid-2",
+      "name": "member:invite",
+      "display_name": "Invite Members",
+      "description": "Send invitations to new members",
+      "category": "member",
+      "is_system": true,
+      "organization_id": null,
+      "created_at": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "perm-uuid-3",
+      "name": "report:export",
+      "display_name": "Export Reports",
+      "description": "Export reports to various formats",
+      "category": "report",
+      "is_system": false,
+      "organization_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+      "created_at": "2025-03-10T12:00:00Z"
+    }
+  ]
+}
+```
+
+### GET /health
+**Response (200 OK):**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-11-23T10:30:00Z",
+  "version": "1.0.0",
+  "components": {
+    "database": {
+      "status": "healthy",
+      "response_time_ms": 5
+    },
+    "redis": {
+      "status": "healthy",
+      "response_time_ms": 2
+    },
+    "email": {
+      "status": "healthy"
+    }
+  }
+}
+```
+
+### Error Examples
+
+**400 Bad Request - Validation Error:**
+```json
+{
+  "success": false,
+  "error_code": "VALIDATION_FAILED",
+  "message": "Invalid request data",
+  "errors": {
+    "email": "Invalid email format",
+    "password": "Password must be at least 8 characters"
+  },
+  "request_id": "7e00ef6e-34fd-428b-9871-52e6689793aa",
+  "timestamp": "2025-11-23T06:33:09Z"
+}
+```
+
+**401 Unauthorized:**
+```json
+{
+  "success": false,
+  "error_code": "UNAUTHORIZED",
+  "message": "Invalid credentials",
+  "request_id": "8f11fg67-45ge-529c-9982-63f6689793bb",
+  "timestamp": "2025-11-23T06:35:00Z"
+}
+```
+
+**403 Forbidden - Missing Permission:**
+```json
+{
+  "success": false,
+  "error_code": "FORBIDDEN",
+  "message": "You don't have permission to perform this action",
+  "errors": {
+    "required_permission": "member:invite",
+    "user_permissions": ["member:view"]
+  },
+  "request_id": "9g22gh78-56hf-630d-aa93-74g7790804cc",
+  "timestamp": "2025-11-23T06:40:00Z"
+}
+```
+
+**404 Not Found:**
+```json
+{
+  "success": false,
+  "error_code": "NOT_FOUND",
+  "message": "Resource not found",
+  "request_id": "ah33hi89-67ig-741e-bb04-85h8801915dd",
+  "timestamp": "2025-11-23T06:45:00Z"
+}
+```
+
+**429 Too Many Requests:**
+```json
+{
+  "success": false,
+  "error_code": "RATE_LIMIT_EXCEEDED",
+  "message": "Too many requests. Please try again later.",
+  "errors": {
+    "retry_after": 3600,
+    "limit": 10,
+    "window": "1 hour"
+  },
+  "request_id": "bi44ij90-78jh-852f-cc15-96i9912026ee",
+  "timestamp": "2025-11-23T06:50:00Z"
+}
+```
+
+**500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error_code": "INTERNAL_ERROR",
+  "message": "An internal error occurred",
+  "request_id": "cj55jk01-89ki-963g-dd26-a7j0a23137ff",
+  "timestamp": "2025-11-23T06:55:00Z"
+}
+```
+
+---
+
+## Rate Limits
+
+| Scope | Limit | Window |
+|-------|-------|--------|
+| Registration | 10 requests | 1 hour (per IP) |
+| Login | 10 requests | 15 minutes (per IP) |
+| Password Reset | 3 requests | 1 hour (per email) |
+| Email Verification | 5 requests | 15 minutes (per email) |
+| OAuth2 Token | 100 requests | 1 hour (per IP) |
+| Token Refresh | 50 requests | 1 hour (per user) |
+| API Calls | 1000 requests | 1 hour (per user) |
+
+---
+
+## JWT Token Structure
+
+**Access Token Claims:**
+```json
+{
+  "sub": "123e4567-e89b-12d3-a456-426614174000",
+  "email": "user@example.com",
+  "org_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+  "role": "owner",
+  "permissions": ["*"],
+  "iat": 1700000000,
+  "exp": 1700000900,
+  "iss": "blocksure-auth",
+  "aud": "blocksure-api"
+}
+```
+
+**Refresh Token Claims:**
+```json
+{
+  "sub": "123e4567-e89b-12d3-a456-426614174000",
+  "org_id": "eeacc427-b91d-4e38-a4a7-69375a1b8628",
+  "token_id": "rt_abc123def456",
+  "iat": 1700000000,
+  "exp": 1702592000,
+  "iss": "blocksure-auth"
+}
+```
+
+---
+
+**Last Updated**: November 23, 2025  
+**API Version**: v1  
+**OpenAPI Spec**: [OPENAPI_SPEC.yaml](./OPENAPI_SPEC.yaml)

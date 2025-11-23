@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,10 @@ type UserService interface {
 	// SESSION MANAGEMENT
 	GetUserSessions(ctx context.Context, userID string) ([]*models.UserSession, error)
 	RevokeUserSession(ctx context.Context, userID, sessionID, reason string) error
+
+	// OAuth2 SPECIFIC
+	AuthenticateByEmail(ctx context.Context, email, password string) (*models.User, error)
+	IsOrgMember(ctx context.Context, userID, orgID uuid.UUID) (bool, error)
 
 	// DEPENDENCY INJECTION
 	SetRedisClient(client *redis.Client)
@@ -1356,6 +1361,63 @@ func (s *userService) RevokeUserSession(ctx context.Context, userID, sessionID, 
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// OAuth2 SPECIFIC METHODS
+// ───────────────────────────────────────────────────────────────────────────────
+
+// AuthenticateByEmail validates email and password for OAuth2 flow
+func (s *userService) AuthenticateByEmail(ctx context.Context, email, password string) (*models.User, error) {
+	if email == "" || password == "" {
+		return nil, errors.New("email and password are required")
+	}
+
+	// Get user by email
+	user, err := s.repo.User().GetByEmail(ctx, email)
+	if err != nil {
+		return nil, errors.New("invalid credentials")
+	}
+	if user == nil {
+		return nil, errors.New("invalid credentials")
+	}
+
+	// Check if user is active
+	if user.Status != models.UserStatusActive {
+		return nil, errors.New("user account is not active")
+	}
+
+	// Verify password
+	valid, err := s.passwordService.Verify(password, user.PasswordHash)
+	if err != nil || !valid {
+		return nil, errors.New("invalid credentials")
+	}
+
+	return user, nil
+}
+
+// IsOrgMember checks if a user belongs to a specific organization
+func (s *userService) IsOrgMember(ctx context.Context, userID, orgID uuid.UUID) (bool, error) {
+	if userID == uuid.Nil || orgID == uuid.Nil {
+		return false, errors.New("userID and orgID are required")
+	}
+
+	// Check if membership exists
+	membership, err := s.repo.OrganizationMembership().GetByOrganizationAndUser(ctx, orgID.String(), userID.String())
+	if err != nil {
+		// If error is "not found", return false without error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check organization membership: %w", err)
+	}
+
+	// Check if membership is active
+	if membership == nil || membership.Status != models.MembershipStatusActive {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -1761,4 +1823,10 @@ func getUserAgent(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// hashToken creates a SHA256 hash of the token for secure storage/lookup
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

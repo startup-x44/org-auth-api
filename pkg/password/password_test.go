@@ -10,7 +10,7 @@ func TestPasswordService(t *testing.T) {
 	svc := password.NewService()
 
 	// Test password hashing
-	plainPassword := "TestPassword123!"
+	plainPassword := "TestAdmin123!!"
 	hash, err := svc.Hash(plainPassword)
 	if err != nil {
 		t.Fatalf("Failed to hash password: %v", err)
@@ -29,7 +29,7 @@ func TestPasswordService(t *testing.T) {
 		t.Fatalf("Failed to verify correct password: %v", err)
 	}
 
-	if valid, err := svc.Verify("WrongPassword123!", hash); err == nil && valid {
+	if valid, err := svc.Verify("WrongAdmin123!!", hash); err == nil && valid {
 		t.Error("Should fail to verify wrong password")
 	}
 
@@ -77,7 +77,7 @@ func TestPasswordValidation(t *testing.T) {
 // BenchmarkPasswordVerify benchmarks password verification performance
 func BenchmarkPasswordVerify(b *testing.B) {
 	svc := password.NewService()
-	password := "BenchmarkTestPassword123!"
+	password := "BenchmarkTestAdmin123!!"
 	hash, err := svc.Hash(password)
 	if err != nil {
 		b.Fatalf("Failed to hash password: %v", err)
@@ -97,7 +97,7 @@ func BenchmarkPasswordVerify(b *testing.B) {
 // BenchmarkPasswordVerifyWrong benchmarks password verification with wrong password
 func BenchmarkPasswordVerifyWrong(b *testing.B) {
 	svc := password.NewService()
-	password := "BenchmarkTestPassword123!"
+	password := "BenchmarkTestAdmin123!!"
 	hash, err := svc.Hash(password)
 	if err != nil {
 		b.Fatalf("Failed to hash password: %v", err)
@@ -107,7 +107,7 @@ func BenchmarkPasswordVerifyWrong(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		valid, err := svc.Verify("WrongPassword123!", hash)
+		valid, err := svc.Verify("WrongAdmin123!!", hash)
 		// We expect this to fail, but we still want to measure the performance
 		_ = valid
 		_ = err
@@ -117,7 +117,7 @@ func BenchmarkPasswordVerifyWrong(b *testing.B) {
 // BenchmarkPasswordHash benchmarks password hashing performance
 func BenchmarkPasswordHash(b *testing.B) {
 	svc := password.NewService()
-	password := "BenchmarkTestPassword123!"
+	password := "BenchmarkTestAdmin123!!"
 
 	b.ResetTimer()
 	b.ReportAllocs()

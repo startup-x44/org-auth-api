@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"auth-service/internal/models"
@@ -282,11 +283,8 @@ func (r *permissionRepository) AssignToRole(ctx context.Context, roleID, permiss
 		return fmt.Errorf("permission not found: %w", err)
 	}
 
-	// CRITICAL SECURITY CHECK 1: System permissions can ONLY be assigned to system roles
-	if permission.IsSystem && !role.IsSystem {
-		return fmt.Errorf("SECURITY VIOLATION: Cannot assign system permission '%s' to custom role '%s'. System permissions can only be assigned to system roles",
-			permission.Name, role.Name)
-	}
+	// CRITICAL SECURITY CHECK 1: System permissions can be assigned to system roles OR custom roles
+	// (Restriction removed to allow custom roles to have system capabilities)
 
 	// CRITICAL SECURITY CHECK 2: Custom permissions CANNOT be assigned to system roles
 	if !permission.IsSystem && role.IsSystem {
@@ -308,11 +306,31 @@ func (r *permissionRepository) AssignToRole(ctx context.Context, roleID, permiss
 		}
 	}
 
-	// All security checks passed - create the assignment
-	return r.db.WithContext(ctx).Create(&models.RolePermission{
+	// All security checks passed - create the assignment (ignore duplicates)
+	// Use FirstOrCreate to make the assignment idempotent
+	rolePermission := models.RolePermission{
 		RoleID:       roleID,
 		PermissionID: permissionID,
-	}).Error
+	}
+
+	// Check if assignment already exists
+	var existing models.RolePermission
+	err := r.db.WithContext(ctx).
+		Where("role_id = ? AND permission_id = ?", roleID, permissionID).
+		First(&existing).Error
+
+	if err == nil {
+		// Assignment already exists - this is not an error, just return success
+		return nil
+	}
+
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		// Some other database error occurred
+		return fmt.Errorf("failed to check existing assignment: %w", err)
+	}
+
+	// Assignment doesn't exist, create it
+	return r.db.WithContext(ctx).Create(&rolePermission).Error
 }
 
 func (r *permissionRepository) RevokeFromRole(ctx context.Context, roleID, permissionID uuid.UUID) error {

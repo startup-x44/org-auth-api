@@ -95,16 +95,16 @@ func (s *apiKeyService) CreateAPIKey(ctx context.Context, userID, tenantID uuid.
 
 	// Create API key model
 	apiKey := &models.APIKey{
-		KeyID:        keyID,
-		HashedSecret: hashedSecret,
-		Name:         req.Name,
-		Description:  req.Description,
-		ClientAppID:  clientAppID,
-		UserID:       userID,
-		TenantID:     tenantID,
-		Scopes:       scopesStr,
-		ExpiresAt:    expiresAt,
-		Revoked:      false,
+		KeyID:          keyID,
+		HashedSecret:   hashedSecret,
+		Name:           req.Name,
+		Description:    req.Description,
+		ClientAppID:    clientAppID,
+		UserID:         userID,
+		OrganizationID: tenantID,
+		Scopes:         scopesStr,
+		ExpiresAt:      expiresAt,
+		Revoked:        false,
 	}
 
 	// Save to database

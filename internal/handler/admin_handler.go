@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"auth-service/internal/models"
 	"auth-service/internal/service"
 )
 
@@ -19,6 +20,39 @@ func NewAdminHandler(authService service.AuthService) *AdminHandler {
 	return &AdminHandler{
 		authService: authService,
 	}
+}
+
+// GetAdminProfile handles retrieving admin/superadmin profile information
+func (h *AdminHandler) GetAdminProfile(c *gin.Context) {
+	// Get user from context (set by authMiddleware.LoadUser())
+	userCtx, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "User context not found",
+		})
+		return
+	}
+
+	user := userCtx.(*models.User)
+
+	// Get user's organizations (admins can see all)
+	organizations, err := h.authService.OrganizationService().ListAllOrganizations(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to fetch organizations: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"user":          user,
+			"organizations": organizations,
+		},
+	})
 }
 
 // ListUsers handles listing users with cursor-based pagination

@@ -297,6 +297,7 @@ func Migrate(db *gorm.DB) error {
 		&models.AuthorizationCode{}, // OAuth2 authorization codes
 		&models.OAuthRefreshToken{}, // OAuth2 refresh tokens
 		&models.APIKey{},            // API keys for programmatic access
+		&models.AuditLog{},          // Audit trail for security events
 	); err != nil {
 		return err
 	}

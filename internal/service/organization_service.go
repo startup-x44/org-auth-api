@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,6 +38,7 @@ type OrganizationService interface {
 	CancelInvitation(ctx context.Context, invitationID string) error
 	ResendInvitation(ctx context.Context, invitationID string) (*models.OrganizationInvitation, error)
 	ListPendingInvitations(ctx context.Context, orgID string, search ...string) ([]*models.OrganizationInvitation, error)
+	GetInvitationByToken(ctx context.Context, token string) (*InvitationDetails, error)
 }
 
 // CreateOrganizationRequest represents organization creation request
@@ -83,6 +82,15 @@ type InviteUserRequest struct {
 	OrganizationID string `json:"organization_id"`
 	Email          string `json:"email" binding:"required"`
 	RoleName       string `json:"role" binding:"required"` // Role name to lookup (e.g., "owner", "student")
+}
+
+// InvitationDetails represents public invitation details
+type InvitationDetails struct {
+	Email            string    `json:"email"`
+	OrganizationName string    `json:"organization_name"`
+	RoleName         string    `json:"role_name"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	Status           string    `json:"status"`
 }
 
 // UpdateMembershipRequest represents membership update request
@@ -683,6 +691,45 @@ func (s *organizationService) ResendInvitation(ctx context.Context, invitationID
 	return invitation, nil
 }
 
+// GetInvitationByToken retrieves invitation details by token (public endpoint)
+func (s *organizationService) GetInvitationByToken(ctx context.Context, token string) (*InvitationDetails, error) {
+	tokenHash := hashToken(token)
+
+	invitation, err := s.repo.OrganizationInvitation().GetByToken(ctx, tokenHash)
+	if err != nil {
+		return nil, fmt.Errorf("invitation not found: %w", err)
+	}
+
+	// Check if invitation is still valid
+	if invitation.Status != models.InvitationStatusPending {
+		return nil, errors.New("invitation is no longer valid")
+	}
+
+	if invitation.ExpiresAt.Before(time.Now()) {
+		return nil, errors.New("invitation has expired")
+	}
+
+	// Get organization details
+	org, err := s.repo.Organization().GetByID(ctx, invitation.OrganizationID.String())
+	if err != nil {
+		return nil, fmt.Errorf("organization not found: %w", err)
+	}
+
+	// Get role details
+	role, err := s.repo.Role().GetByID(ctx, invitation.RoleID.String())
+	if err != nil {
+		return nil, fmt.Errorf("role not found: %w", err)
+	}
+
+	return &InvitationDetails{
+		Email:            invitation.Email,
+		OrganizationName: org.Name,
+		RoleName:         role.Name,
+		ExpiresAt:        invitation.ExpiresAt,
+		Status:           invitation.Status,
+	}, nil
+}
+
 // ListPendingInvitations lists pending invitations for an organization
 func (s *organizationService) ListPendingInvitations(ctx context.Context, orgID string, search ...string) ([]*models.OrganizationInvitation, error) {
 	var searchTerm string
@@ -812,10 +859,4 @@ func (s *organizationService) convertToOrganizationResponse(ctx context.Context,
 		UpdatedAt:   org.UpdatedAt,
 		MemberCount: int(memberCount),
 	}
-}
-
-// TODO: Implement these utility functions
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }

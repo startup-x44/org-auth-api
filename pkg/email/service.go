@@ -74,7 +74,7 @@ func (s *service) SendVerificationEmail(toEmail, verificationCode string) error 
 	}
 
 	subject := "Verify Your Email Address"
-	htmlContent, err := s.generateVerificationEmailHTML(verificationCode)
+	htmlContent, err := s.generateVerificationEmailHTML(toEmail, verificationCode)
 	if err != nil {
 		return fmt.Errorf("failed to generate email content: %w", err)
 	}
@@ -217,7 +217,9 @@ func (s *service) generateInvitationEmailHTML(inviterName, organizationName, inv
 }
 
 // generateVerificationEmailHTML generates HTML content for email verification with 6-digit code
-func (s *service) generateVerificationEmailHTML(verificationCode string) (string, error) {
+func (s *service) generateVerificationEmailHTML(toEmail, verificationCode string) (string, error) {
+	verifyURL := fmt.Sprintf("http://localhost:3000/auth/verify-email?email=%s", toEmail)
+
 	tmpl := `
 <!DOCTYPE html>
 <html>
@@ -240,7 +242,16 @@ func (s *service) generateVerificationEmailHTML(verificationCode string) (string
                 <div style="font-size: 36px; font-weight: bold; color: #059669; letter-spacing: 8px; font-family: 'Courier New', monospace;">{{.VerificationCode}}</div>
             </div>
         </div>
+        <p style="text-align: center; margin: 30px 0;">
+            <a href="{{.VerifyURL}}" style="background-color: #10b981; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600; font-size: 16px;">Verify Email Now</a>
+        </p>
         <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
+            Or copy and paste this link in your browser:
+        </p>
+        <p style="font-size: 12px; color: #10b981; word-break: break-all; background: #f3f4f6; padding: 12px; border-radius: 4px; font-family: monospace;">
+            {{.VerifyURL}}
+        </p>
+        <p style="font-size: 14px; color: #6b7280; line-height: 1.6; margin-top: 30px;">
             This code will expire in <strong>15 minutes</strong> for security reasons.
         </p>
         <p style="font-size: 14px; color: #6b7280; line-height: 1.6;">
@@ -264,9 +275,11 @@ func (s *service) generateVerificationEmailHTML(verificationCode string) (string
 
 	data := struct {
 		VerificationCode string
+		VerifyURL        string
 		FromName         string
 	}{
 		VerificationCode: verificationCode,
+		VerifyURL:        verifyURL,
 		FromName:         s.config.FromName,
 	}
 

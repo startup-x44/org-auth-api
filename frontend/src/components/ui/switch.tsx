@@ -1,65 +1,29 @@
-/**
- * Switch Component - Toggle switch for boolean settings
- */
+"use client"
 
-import React from 'react'
-import { cn } from '@/lib/utils'
+import * as React from "react"
+import * as SwitchPrimitives from "@radix-ui/react-switch"
 
-interface SwitchProps {
-  checked?: boolean
-  onChange?: (checked: boolean) => void
-  disabled?: boolean
-  className?: string
-  id?: string
-  'aria-label'?: string
-  'aria-describedby'?: string
-}
+import { cn } from "@/lib/utils"
 
-export function Switch({ 
-  checked = false, 
-  onChange, 
-  disabled = false, 
-  className,
-  id,
-  ...ariaProps
-}: SwitchProps) {
-  const handleToggle = () => {
-    if (!disabled && onChange) {
-      onChange(!checked)
-    }
-  }
-
-  const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === ' ' || event.key === 'Enter') {
-      event.preventDefault()
-      handleToggle()
-    }
-  }
-
-  return (
-    <button
-      id={id}
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={handleToggle}
-      onKeyDown={handleKeyDown}
+const Switch = React.forwardRef<
+  React.ElementRef<typeof SwitchPrimitives.Root>,
+  React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>
+>(({ className, ...props }, ref) => (
+  <SwitchPrimitives.Root
+    className={cn(
+      "peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input",
+      className
+    )}
+    {...props}
+    ref={ref}
+  >
+    <SwitchPrimitives.Thumb
       className={cn(
-        'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
-        checked ? 'bg-blue-600' : 'bg-gray-200',
-        disabled && 'cursor-not-allowed opacity-50',
-        className
+        "pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0"
       )}
-      {...ariaProps}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-          checked ? 'translate-x-5' : 'translate-x-0'
-        )}
-      />
-    </button>
-  )
-}
+    />
+  </SwitchPrimitives.Root>
+))
+Switch.displayName = SwitchPrimitives.Root.displayName
+
+export { Switch }

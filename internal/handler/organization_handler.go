@@ -319,12 +319,28 @@ func (h *OrganizationHandler) ResendInvitation(c *gin.Context) {
 	})
 }
 
-// GetInvitationDetails handles getting invitation details by token
+// GetInvitationDetails handles getting invitation details by token (public endpoint)
 func (h *OrganizationHandler) GetInvitationDetails(c *gin.Context) {
-	// For now, return not implemented
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"success": false,
-		"message": "GetInvitationDetails not yet implemented",
+	token := c.Param("token")
+
+	invitation, err := h.authService.OrganizationService().GetInvitationByToken(c.Request.Context(), token)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "Invitation not found or expired",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"email":             invitation.Email,
+			"organization_name": invitation.OrganizationName,
+			"role_name":         invitation.RoleName,
+			"expires_at":        invitation.ExpiresAt,
+			"status":            invitation.Status,
+		},
 	})
 }
 

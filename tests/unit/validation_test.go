@@ -209,7 +209,7 @@ func TestValidatePassword(t *testing.T) {
 		},
 		{
 			name:     "Long password",
-			password: "ThisIsAVeryL0ng&SecurePassword123!",
+			password: "ThisIsAVeryL0ng&SecureAdmin123!!",
 			wantErr:  false,
 		},
 		{
@@ -240,7 +240,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing uppercase
 		{
 			name:     "No uppercase",
-			password: "password123!",
+			password: "Admin123!!",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoUpper,
 		},
@@ -248,7 +248,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing lowercase
 		{
 			name:     "No lowercase",
-			password: "PASSWORD123!",
+			password: "Admin123!!",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoLower,
 		},
@@ -264,7 +264,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing special character
 		{
 			name:     "No special character",
-			password: "Password123",
+			password: "Admin123!",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoSpecial,
 		},
@@ -272,7 +272,7 @@ func TestValidatePassword(t *testing.T) {
 		// Common weak passwords (still pass if they meet requirements)
 		{
 			name:     "Common password but meets requirements",
-			password: "Password123!",
+			password: "Admin123!!",
 			wantErr:  false, // Meets technical requirements
 		},
 

@@ -18,7 +18,7 @@ import (
 
 // ClientAppService defines client application management operations
 type ClientAppService interface {
-	CreateClientApp(ctx context.Context, req *CreateClientAppRequest, createdBy *models.User) (*ClientAppResponse, string, error)
+	CreateClientApp(ctx context.Context, organizationID uuid.UUID, req *CreateClientAppRequest, createdBy *models.User) (*ClientAppResponse, string, error)
 	GetClientApp(ctx context.Context, id uuid.UUID, requestedBy *models.User) (*ClientAppResponse, error)
 	GetClientAppByClientID(ctx context.Context, clientID string) (*models.ClientApp, error)
 	ListClientApps(ctx context.Context, limit, offset int, requestedBy *models.User) ([]*ClientAppResponse, int64, error)
@@ -57,6 +57,7 @@ type UpdateClientAppRequest struct {
 	RedirectURIs   []string `json:"redirect_uris" validate:"omitempty,min=1,dive,url"`
 	AllowedOrigins []string `json:"allowed_origins" validate:"omitempty,dive,url"`
 	AllowedScopes  []string `json:"allowed_scopes" validate:"omitempty"`
+	IsConfidential *bool    `json:"is_confidential" validate:"omitempty"`
 }
 
 // ClientAppResponse represents a client app response (without secret)
@@ -72,12 +73,8 @@ type ClientAppResponse struct {
 	UpdatedAt      string    `json:"updated_at"`
 }
 
-func (s *clientAppService) CreateClientApp(ctx context.Context, req *CreateClientAppRequest, createdBy *models.User) (*ClientAppResponse, string, error) {
-	// Only superadmin can create client apps
-	if !createdBy.IsSuperadmin {
-		return nil, "", errors.New("only superadmin can create client applications")
-	}
-
+func (s *clientAppService) CreateClientApp(ctx context.Context, organizationID uuid.UUID, req *CreateClientAppRequest, createdBy *models.User) (*ClientAppResponse, string, error) {
+	// Authorization check is done in handler (superadmin or org owner)
 	// Validate redirect URIs
 	for _, uri := range req.RedirectURIs {
 		if err := validateURI(uri); err != nil {
@@ -113,6 +110,7 @@ func (s *clientAppService) CreateClientApp(ctx context.Context, req *CreateClien
 		Name:           req.Name,
 		ClientID:       clientID,
 		ClientSecret:   hashedSecret,
+		OrganizationID: organizationID,
 		RedirectURIs:   req.RedirectURIs,
 		AllowedOrigins: req.AllowedOrigins,
 		AllowedScopes:  allowedScopes,
@@ -128,10 +126,7 @@ func (s *clientAppService) CreateClientApp(ctx context.Context, req *CreateClien
 }
 
 func (s *clientAppService) GetClientApp(ctx context.Context, id uuid.UUID, requestedBy *models.User) (*ClientAppResponse, error) {
-	if !requestedBy.IsSuperadmin {
-		return nil, errors.New("only superadmin can view client applications")
-	}
-
+	// Authorization check is done in handler (superadmin or org owner)
 	clientApp, err := s.repo.ClientApp().GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -145,10 +140,7 @@ func (s *clientAppService) GetClientAppByClientID(ctx context.Context, clientID 
 }
 
 func (s *clientAppService) ListClientApps(ctx context.Context, limit, offset int, requestedBy *models.User) ([]*ClientAppResponse, int64, error) {
-	if !requestedBy.IsSuperadmin {
-		return nil, 0, errors.New("only superadmin can list client applications")
-	}
-
+	// Authorization check is done in handler (superadmin or org owner)
 	clientApps, total, err := s.repo.ClientApp().GetAll(ctx, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -163,10 +155,7 @@ func (s *clientAppService) ListClientApps(ctx context.Context, limit, offset int
 }
 
 func (s *clientAppService) UpdateClientApp(ctx context.Context, id uuid.UUID, req *UpdateClientAppRequest, updatedBy *models.User) (*ClientAppResponse, error) {
-	if !updatedBy.IsSuperadmin {
-		return nil, errors.New("only superadmin can update client applications")
-	}
-
+	// Authorization check is done in handler (superadmin or org owner)
 	clientApp, err := s.repo.ClientApp().GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -190,6 +179,9 @@ func (s *clientAppService) UpdateClientApp(ctx context.Context, id uuid.UUID, re
 	if req.AllowedScopes != nil {
 		clientApp.AllowedScopes = req.AllowedScopes
 	}
+	if req.IsConfidential != nil {
+		clientApp.IsConfidential = *req.IsConfidential
+	}
 
 	if err := s.repo.ClientApp().Update(ctx, clientApp); err != nil {
 		return nil, fmt.Errorf("failed to update client app: %w", err)
@@ -199,18 +191,12 @@ func (s *clientAppService) UpdateClientApp(ctx context.Context, id uuid.UUID, re
 }
 
 func (s *clientAppService) DeleteClientApp(ctx context.Context, id uuid.UUID, deletedBy *models.User) error {
-	if !deletedBy.IsSuperadmin {
-		return errors.New("only superadmin can delete client applications")
-	}
-
+	// Authorization check is done in handler (superadmin or org owner)
 	return s.repo.ClientApp().Delete(ctx, id)
 }
 
 func (s *clientAppService) RotateClientSecret(ctx context.Context, id uuid.UUID, rotatedBy *models.User) (string, error) {
-	if !rotatedBy.IsSuperadmin {
-		return "", errors.New("only superadmin can rotate client secrets")
-	}
-
+	// Authorization check is done in handler (superadmin or org owner)
 	clientApp, err := s.repo.ClientApp().GetByID(ctx, id)
 	if err != nil {
 		return "", err

@@ -2,14 +2,18 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"auth-service/internal/repository"
 	"auth-service/internal/service"
+	"auth-service/pkg/password"
 )
 
 // ResourcePolicy defines access control policies for different resource types
@@ -44,7 +48,7 @@ func DefaultResourcePolicy() *ResourcePolicy {
 	}
 }
 
-// AuthMiddleware handles JWT authentication
+// AuthMiddleware handles JWT and API key authentication
 type AuthMiddleware struct {
 	authService service.AuthService
 	repo        repository.Repository
@@ -63,114 +67,6 @@ func (m *AuthMiddleware) canAccessResource(c *gin.Context, resource string, poli
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	// Get user permissions and roles from token
-	token := m.extractToken(c)
-	if token == "" {
-		return false
-	}
-
-	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
-	if err != nil {
-		return false
-	}
-
-	// 1. Check if it's a role-specific resource (strict matching required)
-	for _, roleResource := range policy.RoleSpecificResources {
-		if strings.HasPrefix(resource, roleResource) {
-			// For role-specific resources, check exact permission match
-			// SuperAdmin CANNOT bypass role-specific permissions
-			return m.hasExactPermission(claims.Permissions, resource)
-		}
-	}
-
-	// 2. Check if it's an administrative resource (superadmin bypass allowed)
-	for _, adminResource := range policy.AdminResources {
-		if strings.HasPrefix(resource, adminResource) {
-			// SuperAdmin can bypass admin resources
-			if isSuperadmin {
-				return true
-			}
-			// Non-superadmin must have the specific permission
-			return m.hasExactPermission(claims.Permissions, resource)
-		}
-	}
-
-	// 3. Check if it's a user resource (role hierarchy applies)
-	for _, userResource := range policy.UserResources {
-		if strings.HasPrefix(resource, userResource) {
-			// Check role hierarchy: superadmin > admin > member > user
-			return m.hasRoleHierarchyAccess(claims.Roles, resource) ||
-				m.hasExactPermission(claims.Permissions, resource)
-		}
-	}
-
-	// 4. Default: check exact permission match (no superadmin bypass)
-	return m.hasExactPermission(claims.Permissions, resource)
-}
-
-// hasExactPermission checks if user has the specific permission
-func (m *AuthMiddleware) hasExactPermission(permissions []string, required string) bool {
-	for _, p := range permissions {
-		if p == required {
-			return true
-		}
-	}
-	return false
-}
-
-// hasRole checks if user has a specific role
-func (m *AuthMiddleware) hasRole(c *gin.Context, requiredRole string) bool {
-	token := m.extractToken(c)
-	if token == "" {
-		return false
-	}
-
-	claims, err := m.authService.ValidateToken(c.Request.Context(), token)
-	if err != nil {
-		return false
-	}
-
-	for _, role := range claims.Roles {
-		if role == requiredRole {
-			return true
-		}
-	}
-	return false
-}
-
-// hasRoleHierarchyAccess checks role hierarchy for user-facing resources
-func (m *AuthMiddleware) hasRoleHierarchyAccess(userRoles []string, resource string) bool {
-	// Define role hierarchy: superadmin > admin > member > user
-	roleHierarchy := map[string]int{
-		"superadmin": 4,
-		"admin":      3,
-		"member":     2,
-		"user":       1,
-	}
-
-	// Get the highest role level for the user
-	userLevel := 0
-	for _, role := range userRoles {
-		if level, exists := roleHierarchy[role]; exists && level > userLevel {
-			userLevel = level
-		}
-	}
-
-	// Determine required level based on resource
-	requiredLevel := 1 // default to user level
-	if strings.Contains(resource, "admin") {
-		requiredLevel = 3
-	} else if strings.Contains(resource, "member") {
-		requiredLevel = 2
-	}
-
-	return userLevel >= requiredLevel
-}
-
-// canAccessResource implements the unified policy logic for resource access
-func (m *AuthMiddleware) canAccessResource(c *gin.Context, resource string, policy *ResourcePolicy) bool {
-	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
-
-	// Extract user info from context
 	token := m.extractToken(c)
 	if token == "" {
 		return false
@@ -225,7 +121,7 @@ func (m *AuthMiddleware) hasExactPermission(permissions []string, required strin
 }
 
 // hasRole checks if user has a specific role
-func (m *AuthMiddleware) hasRole(c *gin.Context, role string) bool {
+func (m *AuthMiddleware) hasRole(c *gin.Context, requiredRole string) bool {
 	token := m.extractToken(c)
 	if token == "" {
 		return false
@@ -236,26 +132,43 @@ func (m *AuthMiddleware) hasRole(c *gin.Context, role string) bool {
 		return false
 	}
 
-	// Check if user has the specific role
-	for _, userRole := range claims.Roles {
-		if userRole == role {
-			return true
-		}
-	}
-	return false
+	// Check if user has the specific role (using GlobalRole and OrganizationRole)
+	return claims.GlobalRole == requiredRole || claims.OrganizationRole == requiredRole
 }
 
 // hasRoleHierarchyAccess checks role hierarchy for user resources
 // Hierarchy: superadmin > admin > member > user
-func (m *AuthMiddleware) hasRoleHierarchyAccess(claims interface{}, resource string) bool {
-	// This is a placeholder for role hierarchy logic
-	// You can implement specific hierarchy rules here based on your needs
-	// For now, we'll rely on exact permission matching
-	return false
+func (m *AuthMiddleware) hasRoleHierarchyAccess(claims *service.TokenClaims, resource string) bool {
+	// Define role hierarchy: superadmin > admin > member > user
+	roleHierarchy := map[string]int{
+		"superadmin": 4,
+		"admin":      3,
+		"member":     2,
+		"user":       1,
+	}
+
+	// Get the highest role level for the user (check both global and organization roles)
+	userLevel := 0
+	if level, exists := roleHierarchy[claims.GlobalRole]; exists && level > userLevel {
+		userLevel = level
+	}
+	if level, exists := roleHierarchy[claims.OrganizationRole]; exists && level > userLevel {
+		userLevel = level
+	}
+
+	// Determine required level based on resource
+	requiredLevel := 1 // default to user level
+	if strings.Contains(resource, "admin") {
+		requiredLevel = 3
+	} else if strings.Contains(resource, "member") {
+		requiredLevel = 2
+	}
+
+	return userLevel >= requiredLevel
 }
 
-// AuthRequired middleware requires valid JWT token
-// NO superadmin bypass here - just validates token and sets context
+// AuthRequired middleware requires valid JWT token OR API key
+// NO superadmin bypass here - just validates token/key and sets context
 func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := m.extractToken(c)
@@ -268,6 +181,17 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 			return
 		}
 
+		// Check if it's an API key (format: keyID.secret)
+		if strings.Contains(token, ".") {
+			// Try API key authentication
+			if m.authenticateAPIKey(c, token) {
+				c.Next()
+				return
+			}
+			// If API key auth fails, fall through to try JWT
+		}
+
+		// Try JWT authentication
 		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -283,9 +207,10 @@ func (m *AuthMiddleware) AuthRequired() gin.HandlerFunc {
 		ctx = context.WithValue(ctx, "user_email", claims.Email)
 		ctx = context.WithValue(ctx, "organization_id", claims.OrganizationID)
 		ctx = context.WithValue(ctx, "organization_role", claims.OrganizationRole)
+		ctx = context.WithValue(ctx, "global_role", claims.GlobalRole)
 		ctx = context.WithValue(ctx, "is_superadmin", claims.IsSuperadmin)
 		ctx = context.WithValue(ctx, "permissions", claims.Permissions)
-		ctx = context.WithValue(ctx, "roles", claims.Roles)
+		ctx = context.WithValue(ctx, "auth_method", "jwt")
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
@@ -334,6 +259,7 @@ func (m *AuthMiddleware) LoadUser() gin.HandlerFunc {
 }
 
 // AdminRequired middleware requires superadmin privileges
+// This is the ONLY middleware where superadmin gets automatic access
 func (m *AuthMiddleware) AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool)
@@ -349,47 +275,68 @@ func (m *AuthMiddleware) AdminRequired() gin.HandlerFunc {
 	}
 }
 
-// RequirePermission middleware requires a specific permission
-// Superadmins bypass all permission checks
-func (m *AuthMiddleware) RequirePermission(permission string) gin.HandlerFunc {
+// RequireRole middleware requires exact role match with NO superadmin bypass
+// This is used for role-specific routes where superadmin should NOT have access
+func (m *AuthMiddleware) RequireRole(requiredRole string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Superadmin bypass
-		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
-			c.Next()
-			return
-		}
+		// Get user roles from context - NO superadmin bypass
+		globalRole, _ := c.Request.Context().Value("global_role").(string)
+		orgRole, _ := c.Request.Context().Value("organization_role").(string)
 
-		// Extract permissions from token claims
-		token := m.extractToken(c)
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Authorization token required",
+		// Check for exact role match only
+		if globalRole != requiredRole && orgRole != requiredRole {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":  false,
+				"message":  "Role access denied",
+				"required": requiredRole,
+				"current":  []string{globalRole, orgRole},
 			})
 			c.Abort()
 			return
 		}
 
-		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Invalid or expired token",
-			})
-			c.Abort()
-			return
-		}
+		c.Next()
+	}
+}
 
-		// Check if user has the required permission
-		hasPermission := false
-		for _, p := range claims.Permissions {
-			if p == permission {
-				hasPermission = true
+// RequireAnyRole middleware requires at least one of the specified roles with NO superadmin bypass
+func (m *AuthMiddleware) RequireAnyRole(roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get user roles from context - NO superadmin bypass
+		globalRole, _ := c.Request.Context().Value("global_role").(string)
+		orgRole, _ := c.Request.Context().Value("organization_role").(string)
+
+		// Check if user has any of the required roles
+		hasRole := false
+		for _, role := range roles {
+			if globalRole == role || orgRole == role {
+				hasRole = true
 				break
 			}
 		}
 
-		if !hasPermission {
+		if !hasRole {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success":  false,
+				"message":  "Role access denied",
+				"required": roles,
+				"current":  []string{globalRole, orgRole},
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// RequirePermission middleware requires a specific permission
+// Uses policy-based authorization with resource-specific rules
+func (m *AuthMiddleware) RequirePermission(permission string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Use policy-based authorization instead of blanket superadmin bypass
+		policy := DefaultResourcePolicy()
+		if !m.canAccessResource(c, permission, policy) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success":  false,
 				"message":  "Insufficient permissions",
@@ -404,45 +351,17 @@ func (m *AuthMiddleware) RequirePermission(permission string) gin.HandlerFunc {
 }
 
 // RequireAnyPermission middleware requires at least one of the specified permissions
+// Uses policy-based authorization with resource-specific rules
 func (m *AuthMiddleware) RequireAnyPermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Superadmin bypass
-		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
-			c.Next()
-			return
-		}
-
-		// Extract permissions from token claims
-		token := m.extractToken(c)
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Authorization token required",
-			})
-			c.Abort()
-			return
-		}
-
-		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Invalid or expired token",
-			})
-			c.Abort()
-			return
-		}
-
-		// Check if user has any of the required permissions
+		// Use policy-based authorization for each permission
+		policy := DefaultResourcePolicy()
 		hasPermission := false
-		for _, requiredPerm := range permissions {
-			for _, userPerm := range claims.Permissions {
-				if userPerm == requiredPerm {
-					hasPermission = true
-					break
-				}
-			}
-			if hasPermission {
+
+		// Check if user can access any of the required permissions
+		for _, permission := range permissions {
+			if m.canAccessResource(c, permission, policy) {
+				hasPermission = true
 				break
 			}
 		}
@@ -462,45 +381,17 @@ func (m *AuthMiddleware) RequireAnyPermission(permissions ...string) gin.Handler
 }
 
 // RequireAllPermissions middleware requires all of the specified permissions
+// Uses policy-based authorization with resource-specific rules
 func (m *AuthMiddleware) RequireAllPermissions(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Superadmin bypass
-		if isSuperadmin, exists := c.Request.Context().Value("is_superadmin").(bool); exists && isSuperadmin {
-			c.Next()
-			return
-		}
-
-		// Extract permissions from token claims
-		token := m.extractToken(c)
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Authorization token required",
-			})
-			c.Abort()
-			return
-		}
-
-		claims, err := m.authService.ValidateToken(c.Request.Context(), token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "Invalid or expired token",
-			})
-			c.Abort()
-			return
-		}
-
-		// Check if user has all required permissions
-		userPermMap := make(map[string]bool)
-		for _, p := range claims.Permissions {
-			userPermMap[p] = true
-		}
-
+		// Use policy-based authorization for all permissions
+		policy := DefaultResourcePolicy()
 		missingPerms := []string{}
-		for _, requiredPerm := range permissions {
-			if !userPermMap[requiredPerm] {
-				missingPerms = append(missingPerms, requiredPerm)
+
+		// Check if user can access all required permissions
+		for _, permission := range permissions {
+			if !m.canAccessResource(c, permission, policy) {
+				missingPerms = append(missingPerms, permission)
 			}
 		}
 
@@ -572,6 +463,18 @@ func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 		if origin == "" {
 			c.Next()
 			return
+		}
+
+		// Allow same-origin requests (when origin matches the host)
+		requestHost := c.Request.Host
+		// Parse origin to get host
+		if originURL, err := url.Parse(origin); err == nil {
+			originHost := originURL.Host
+			if originHost == requestHost {
+				// Same origin, allow it
+				c.Next()
+				return
+			}
 		}
 
 		// Check if the origin is allowed
@@ -657,4 +560,83 @@ func RecoveryMiddleware() gin.HandlerFunc {
 		}()
 		c.Next()
 	}
+}
+
+// authenticateAPIKey validates an API key and sets user context
+// Returns true if authentication succeeds, false otherwise
+func (m *AuthMiddleware) authenticateAPIKey(c *gin.Context, token string) bool {
+	// Parse keyID.secret format
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	keyID := parts[0]
+	secret := parts[1]
+
+	// Fetch API key from database
+	apiKey, err := m.repo.APIKey().GetByKeyID(c.Request.Context(), keyID)
+	if err != nil {
+		fmt.Printf("API key not found: %v\n", err)
+		return false
+	}
+
+	// Check if revoked
+	if apiKey.Revoked {
+		fmt.Printf("API key is revoked: %s\n", keyID)
+		return false
+	}
+
+	// Check expiration
+	if apiKey.ExpiresAt != nil && time.Now().After(*apiKey.ExpiresAt) {
+		fmt.Printf("API key expired: %s\n", keyID)
+		return false
+	}
+
+	// Verify secret using Argon2
+	passwordSvc := password.NewService()
+	valid, err := passwordSvc.Verify(secret, apiKey.HashedSecret)
+	if err != nil || !valid {
+		fmt.Printf("API key secret verification failed: %v\n", err)
+		return false
+	}
+
+	// Fetch user
+	user, err := m.repo.User().GetByID(c.Request.Context(), apiKey.UserID.String())
+	if err != nil {
+		fmt.Printf("User not found for API key: %v\n", err)
+		return false
+	}
+
+	// Check if user is active
+	if user.Status != "active" {
+		fmt.Printf("User is not active: %s\n", user.ID)
+		return false
+	}
+
+	// Update last_used_at asynchronously
+	go func() {
+		ctx := context.Background()
+		if err := m.repo.APIKey().UpdateLastUsed(ctx, apiKey.ID); err != nil {
+			fmt.Printf("Failed to update API key last used: %v\n", err)
+		}
+	}()
+
+	// Set user context (similar to JWT but with auth_method="api_key")
+	ctx := context.WithValue(c.Request.Context(), "user_id", user.ID.String())
+	ctx = context.WithValue(ctx, "user_email", user.Email)
+	ctx = context.WithValue(ctx, "organization_id", apiKey.OrganizationID.String())
+	ctx = context.WithValue(ctx, "auth_method", "api_key")
+	ctx = context.WithValue(ctx, "api_key_id", apiKey.ID.String())
+
+	// Set empty values for fields not available in API key auth
+	ctx = context.WithValue(ctx, "organization_role", "")
+	ctx = context.WithValue(ctx, "global_role", "")
+	ctx = context.WithValue(ctx, "is_superadmin", false)
+	ctx = context.WithValue(ctx, "permissions", []string{})
+
+	c.Request = c.Request.WithContext(ctx)
+
+	fmt.Printf("✅ API key authenticated: %s (user: %s)\n", keyID, user.Email)
+	return true
 }

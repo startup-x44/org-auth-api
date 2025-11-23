@@ -22,6 +22,17 @@ func NewAPIKeyHandler(apiKeyService service.APIKeyService) *APIKeyHandler {
 	}
 }
 
+// checkOwnerOrAdminAPIKey checks if user is superadmin or organization owner
+func checkOwnerOrAdminAPIKey(c *gin.Context) bool {
+	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
+	if isSuperadmin {
+		return true
+	}
+
+	orgRole, _ := c.Request.Context().Value("organization_role").(string)
+	return orgRole == "owner"
+}
+
 // CreateAPIKey godoc
 // @Summary Create a new API key
 // @Description Create a new API key for the authenticated user
@@ -35,9 +46,18 @@ func NewAPIKeyHandler(apiKeyService service.APIKeyService) *APIKeyHandler {
 // @Failure 500 {object} gin.H{error=string}
 // @Router /dev/api-keys [post]
 func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
-	// Get user ID and tenant ID from context (set by auth middleware)
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdminAPIKey(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   "owner or superadmin access required",
+		})
+		return
+	}
+
+	// Get user ID and organization ID from context (set by auth middleware)
 	userIDValue := c.Request.Context().Value("user_id")
-	tenantIDValue := c.Request.Context().Value("tenant_id")
+	organizationIDValue := c.Request.Context().Value("organization_id")
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	var userID, tenantID uuid.UUID
@@ -58,8 +78,8 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Handle tenant ID - superadmin users can operate without specific tenant context
-	switch v := tenantIDValue.(type) {
+	// Handle organization ID - superadmin users can operate without specific organization context
+	switch v := organizationIDValue.(type) {
 	case string:
 		tenantID, err = uuid.Parse(v)
 		if err != nil {
@@ -67,7 +87,7 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 				// Use nil UUID for superadmin (global scope)
 				tenantID = uuid.Nil
 			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid tenant ID in context"})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid organization ID in context"})
 				return
 			}
 		}
@@ -78,7 +98,7 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 			// Use nil UUID for superadmin (global scope)
 			tenantID = uuid.Nil
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant ID not found in context"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "organization ID not found in context"})
 			return
 		}
 	}
@@ -113,9 +133,18 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 // @Failure 500 {object} gin.H{error=string}
 // @Router /dev/api-keys [get]
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
-	// Get user ID and tenant ID from context
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdminAPIKey(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   "owner or superadmin access required",
+		})
+		return
+	}
+
+	// Get user ID and organization ID from context
 	userIDValue := c.Request.Context().Value("user_id")
-	tenantIDValue := c.Request.Context().Value("tenant_id")
+	organizationIDValue := c.Request.Context().Value("organization_id")
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	var userID, tenantID uuid.UUID
@@ -136,8 +165,8 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
-	// Handle tenant ID - superadmin users can operate without specific tenant context
-	switch v := tenantIDValue.(type) {
+	// Handle organization ID - superadmin users can operate without specific organization context
+	switch v := organizationIDValue.(type) {
 	case string:
 		tenantID, err = uuid.Parse(v)
 		if err != nil {
@@ -145,7 +174,7 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 				// Use nil UUID for superadmin (global scope)
 				tenantID = uuid.Nil
 			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid tenant ID in context"})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid organization ID in context"})
 				return
 			}
 		}
@@ -156,7 +185,7 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 			// Use nil UUID for superadmin (global scope)
 			tenantID = uuid.Nil
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant ID not found in context"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "organization ID not found in context"})
 			return
 		}
 	}
@@ -186,15 +215,24 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 // @Failure 404 {object} gin.H{error=string}
 // @Router /dev/api-keys/{id} [get]
 func (h *APIKeyHandler) GetAPIKey(c *gin.Context) {
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdminAPIKey(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   "owner or superadmin access required",
+		})
+		return
+	}
+
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID is required"})
 		return
 	}
 
-	// Get user ID and tenant ID from context
+	// Get user ID and organization ID from context
 	userIDValue := c.Request.Context().Value("user_id")
-	tenantIDValue := c.Request.Context().Value("tenant_id")
+	organizationIDValue := c.Request.Context().Value("organization_id")
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	var userID, tenantID uuid.UUID
@@ -215,8 +253,8 @@ func (h *APIKeyHandler) GetAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Handle tenant ID - superadmin users can operate without specific tenant context
-	switch v := tenantIDValue.(type) {
+	// Handle organization ID - superadmin users can operate without specific organization context
+	switch v := organizationIDValue.(type) {
 	case string:
 		tenantID, err = uuid.Parse(v)
 		if err != nil {
@@ -224,7 +262,7 @@ func (h *APIKeyHandler) GetAPIKey(c *gin.Context) {
 				// Use nil UUID for superadmin (global scope)
 				tenantID = uuid.Nil
 			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid tenant ID in context"})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid organization ID in context"})
 				return
 			}
 		}
@@ -235,7 +273,7 @@ func (h *APIKeyHandler) GetAPIKey(c *gin.Context) {
 			// Use nil UUID for superadmin (global scope)
 			tenantID = uuid.Nil
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant ID not found in context"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "organization ID not found in context"})
 			return
 		}
 	}
@@ -264,15 +302,24 @@ func (h *APIKeyHandler) GetAPIKey(c *gin.Context) {
 // @Failure 404 {object} gin.H{error=string}
 // @Router /dev/api-keys/{id} [delete]
 func (h *APIKeyHandler) RevokeAPIKey(c *gin.Context) {
+	// Check if superadmin OR organization owner
+	if !checkOwnerOrAdminAPIKey(c) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"error":   "owner or superadmin access required",
+		})
+		return
+	}
+
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID is required"})
 		return
 	}
 
-	// Get user ID and tenant ID from context
+	// Get user ID and organization ID from context
 	userIDValue := c.Request.Context().Value("user_id")
-	tenantIDValue := c.Request.Context().Value("tenant_id")
+	organizationIDValue := c.Request.Context().Value("organization_id")
 	isSuperadmin, _ := c.Request.Context().Value("is_superadmin").(bool)
 
 	var userID, tenantID uuid.UUID
@@ -293,8 +340,8 @@ func (h *APIKeyHandler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Handle tenant ID - superadmin users can operate without specific tenant context
-	switch v := tenantIDValue.(type) {
+	// Handle organization ID - superadmin users can operate without specific organization context
+	switch v := organizationIDValue.(type) {
 	case string:
 		tenantID, err = uuid.Parse(v)
 		if err != nil {
@@ -302,7 +349,7 @@ func (h *APIKeyHandler) RevokeAPIKey(c *gin.Context) {
 				// Use nil UUID for superadmin (global scope)
 				tenantID = uuid.Nil
 			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid tenant ID in context"})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid organization ID in context"})
 				return
 			}
 		}
@@ -313,7 +360,7 @@ func (h *APIKeyHandler) RevokeAPIKey(c *gin.Context) {
 			// Use nil UUID for superadmin (global scope)
 			tenantID = uuid.Nil
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant ID not found in context"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "organization ID not found in context"})
 			return
 		}
 	}

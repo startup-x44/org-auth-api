@@ -59,7 +59,7 @@ func (r *apiKeyRepository) GetByKeyID(ctx context.Context, keyID string) (*model
 func (r *apiKeyRepository) GetByKeyIDWithOwnership(ctx context.Context, keyID string, userID, tenantID uuid.UUID) (*models.APIKey, error) {
 	var apiKey models.APIKey
 	err := r.db.WithContext(ctx).
-		Where("key_id = ? AND user_id = ? AND tenant_id = ?", keyID, userID, tenantID).
+		Where("key_id = ? AND user_id = ? AND organization_id = ?", keyID, userID, tenantID).
 		First(&apiKey).Error
 
 	if err != nil {
@@ -69,11 +69,11 @@ func (r *apiKeyRepository) GetByKeyIDWithOwnership(ctx context.Context, keyID st
 	return &apiKey, nil
 }
 
-// GetByID retrieves an API key by its ID (with tenant isolation)
+// GetByID retrieves an API key by its ID (with organization isolation)
 func (r *apiKeyRepository) GetByID(ctx context.Context, id uuid.UUID, userID, tenantID uuid.UUID) (*models.APIKey, error) {
 	var apiKey models.APIKey
 	err := r.db.WithContext(ctx).
-		Where("id = ? AND user_id = ? AND tenant_id = ?", id, userID, tenantID).
+		Where("id = ? AND user_id = ? AND organization_id = ?", id, userID, tenantID).
 		First(&apiKey).Error
 
 	if err != nil {
@@ -83,22 +83,22 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id uuid.UUID, userID, te
 	return &apiKey, nil
 }
 
-// ListByUser retrieves all API keys for a specific user (with tenant isolation)
+// ListByUser retrieves all API keys for a specific user (with organization isolation)
 func (r *apiKeyRepository) ListByUser(ctx context.Context, userID, tenantID uuid.UUID) ([]*models.APIKey, error) {
 	var apiKeys []*models.APIKey
 	err := r.db.WithContext(ctx).
-		Where("user_id = ? AND tenant_id = ?", userID, tenantID).
+		Where("user_id = ? AND organization_id = ?", userID, tenantID).
 		Order("created_at DESC").
 		Find(&apiKeys).Error
 
 	return apiKeys, err
 }
 
-// ListByClientApp retrieves all API keys for a specific client app (with tenant isolation)
+// ListByClientApp retrieves all API keys for a specific client app (with organization isolation)
 func (r *apiKeyRepository) ListByClientApp(ctx context.Context, clientAppID, tenantID uuid.UUID) ([]*models.APIKey, error) {
 	var apiKeys []*models.APIKey
 	err := r.db.WithContext(ctx).
-		Where("client_app_id = ? AND tenant_id = ?", clientAppID, tenantID).
+		Where("client_app_id = ? AND organization_id = ?", clientAppID, tenantID).
 		Order("created_at DESC").
 		Find(&apiKeys).Error
 
@@ -110,11 +110,11 @@ func (r *apiKeyRepository) Update(ctx context.Context, apiKey *models.APIKey) er
 	return r.db.WithContext(ctx).Save(apiKey).Error
 }
 
-// Revoke marks an API key as revoked (with tenant isolation)
+// Revoke marks an API key as revoked (with organization isolation)
 func (r *apiKeyRepository) Revoke(ctx context.Context, id uuid.UUID, userID, tenantID uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&models.APIKey{}).
-		Where("id = ? AND user_id = ? AND tenant_id = ?", id, userID, tenantID).
+		Where("id = ? AND user_id = ? AND organization_id = ?", id, userID, tenantID).
 		Updates(map[string]interface{}{
 			"revoked":    true,
 			"updated_at": time.Now(),
