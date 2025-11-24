@@ -1,384 +1,300 @@
 'use client'
 
-import { useAuth } from '../../../contexts/auth-context'
-import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { SuperAdminLayout } from '../../../components/layout/superadmin-layout'
-import { Card } from '@/components/ui/card'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/contexts/auth-context'
+import { SuperAdminLayout } from '@/components/layout/superadmin-layout'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Settings, Save, Shield, Database, Mail, Globe, Bell } from 'lucide-react'
+import { Separator } from '@/components/ui/separator'
+import { Settings, Save, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 export default function SettingsPage() {
-  const { user, loading } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState('general')
+  const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
-    if (!loading && !user) {
+    if (!authLoading && !user) {
       router.push('/auth/login')
-      return
+    } else if (!authLoading && user && !user.is_superadmin) {
+      router.push('/user/dashboard')
     }
+  }, [user, authLoading, router])
 
-    if (!loading && user && !user.is_superadmin) {
-      router.push('/user')
-      return
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      toast.success('Settings saved successfully')
+    } catch (error) {
+      toast.error('Failed to save settings')
+    } finally {
+      setIsSaving(false)
     }
-  }, [user, loading, router])
+  }
 
-  if (loading) {
+  if (authLoading || !user?.is_superadmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
-      </div>
+      <SuperAdminLayout>
+        <div className="space-y-6">
+          <Skeleton className="h-8 w-64" />
+          <Card>
+            <CardContent className="pt-6">
+              <Skeleton className="h-40 w-full" />
+            </CardContent>
+          </Card>
+        </div>
+      </SuperAdminLayout>
     )
   }
-
-  if (!user || !user.is_superadmin) {
-    return null
-  }
-
-  const tabs = [
-    { id: 'general', name: 'General', icon: Settings },
-    { id: 'security', name: 'Security', icon: Shield },
-    { id: 'database', name: 'Database', icon: Database },
-    { id: 'email', name: 'Email', icon: Mail },
-    { id: 'api', name: 'API', icon: Globe },
-    { id: 'notifications', name: 'Notifications', icon: Bell },
-  ]
 
   return (
     <SuperAdminLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">System Settings</h1>
-          <p className="text-gray-600 mt-2">Configure system-wide settings and preferences</p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold">System Settings</h1>
+            <p className="text-muted-foreground mt-2">Configure system-wide settings</p>
+          </div>
         </div>
 
-        <div className="flex gap-6">
-          {/* Sidebar Navigation */}
-          <div className="w-64 shrink-0">
-            <Card className="p-4">
-              <nav className="space-y-2">
-                {tabs.map((tab) => {
-                  const Icon = tab.icon
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`w-full flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                        }`}
-                    >
-                      <Icon className="h-4 w-4 mr-3" />
-                      {tab.name}
-                    </button>
-                  )
-                })}
-              </nav>
-            </Card>
-          </div>
-
-          {/* Content Area */}
-          <div className="flex-1">
-            {activeTab === 'general' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">General Settings</h2>
-                <div className="space-y-6">
-                  <div>
-                    <Label className="mb-2 block">
-                      Application Name
-                    </Label>
-                    <Input
-                      type="text"
-                      defaultValue="NILOAUTH"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Application URL
-                    </Label>
-                    <Input
-                      type="url"
-                      defaultValue="https://auth.example.com"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Time Zone
-                    </Label>
-                    <Select defaultValue="UTC">
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select timezone" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="UTC">UTC</SelectItem>
-                        <SelectItem value="America/New_York">America/New_York</SelectItem>
-                        <SelectItem value="Europe/London">Europe/London</SelectItem>
-                        <SelectItem value="Asia/Tokyo">Asia/Tokyo</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="maintenance" className="text-sm text-gray-900">
-                      Enable maintenance mode
-                    </Label>
-                    <Switch id="maintenance" />
-                  </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">System Status</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">API</span>
+                  <Badge variant="default" className="gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Online
+                  </Badge>
                 </div>
-              </Card>
-            )}
-
-            {activeTab === 'security' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">Security Settings</h2>
-                <div className="space-y-6">
-                  <div>
-                    <Label className="mb-2 block">
-                      JWT Token Expiration (minutes)
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="15"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Refresh Token Expiration (days)
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="7"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Password Minimum Length
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="8"
-                    />
-                  </div>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="requireSpecialChars" className="text-sm text-gray-900">
-                        Require special characters in passwords
-                      </Label>
-                      <Switch id="requireSpecialChars" defaultChecked />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="enable2FA" className="text-sm text-gray-900">
-                        Enable two-factor authentication
-                      </Label>
-                      <Switch id="enable2FA" />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="sessionTimeout" className="text-sm text-gray-900">
-                        Enable automatic session timeout
-                      </Label>
-                      <Switch id="sessionTimeout" defaultChecked />
-                    </div>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Database</span>
+                  <Badge variant="default" className="gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Connected
+                  </Badge>
                 </div>
-              </Card>
-            )}
-
-            {activeTab === 'database' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">Database Settings</h2>
-                <div className="space-y-6">
-                  <div>
-                    <Label className="mb-2 block">
-                      Connection Pool Size
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="20"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Query Timeout (seconds)
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="30"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Backup Retention (days)
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="30"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="autoBackup" className="text-sm text-gray-900">
-                      Enable automatic backups
-                    </Label>
-                    <Switch id="autoBackup" defaultChecked />
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Redis</span>
+                  <Badge variant="default" className="gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Connected
+                  </Badge>
                 </div>
-              </Card>
-            )}
+              </div>
+            </CardContent>
+          </Card>
 
-            {activeTab === 'email' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">Email Settings</h2>
-                <div className="space-y-6">
-                  <div>
-                    <Label className="mb-2 block">
-                      SMTP Server
-                    </Label>
-                    <Input
-                      type="text"
-                      defaultValue="smtp.gmail.com"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      SMTP Port
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="587"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      From Email
-                    </Label>
-                    <Input
-                      type="email"
-                      defaultValue="noreply@example.com"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      From Name
-                    </Label>
-                    <Input
-                      type="text"
-                      defaultValue="NILOAUTH"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="enableTLS" className="text-sm text-gray-900">
-                      Enable TLS encryption
-                    </Label>
-                    <Switch id="enableTLS" defaultChecked />
-                  </div>
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-sm">Quick Actions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-3">
+                <Button variant="outline" className="justify-start">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Clear Cache
+                </Button>
+                <Button variant="outline" className="justify-start">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Refresh Stats
+                </Button>
+                <Button variant="outline" className="justify-start">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Export Logs
+                </Button>
+                <Button variant="outline" className="justify-start">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Run Diagnostics
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Authentication Settings</CardTitle>
+            <CardDescription>Configure authentication and security options</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="session-timeout">Session Timeout (minutes)</Label>
+                <Input
+                  id="session-timeout"
+                  type="number"
+                  defaultValue="60"
+                  placeholder="60"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="max-login-attempts">Max Login Attempts</Label>
+                <Input
+                  id="max-login-attempts"
+                  type="number"
+                  defaultValue="5"
+                  placeholder="5"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="password-min-length">Password Min Length</Label>
+                <Input
+                  id="password-min-length"
+                  type="number"
+                  defaultValue="8"
+                  placeholder="8"
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Two-Factor Authentication</div>
+                <div className="text-sm text-muted-foreground">
+                  Require 2FA for all users
                 </div>
-              </Card>
-            )}
-
-            {activeTab === 'api' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">API Settings</h2>
-                <div className="space-y-6">
-                  <div>
-                    <Label className="mb-2 block">
-                      Rate Limit (requests per minute)
-                    </Label>
-                    <Input
-                      type="number"
-                      defaultValue="100"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      API Version
-                    </Label>
-                    <Select defaultValue="v1">
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select version" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="v1">v1</SelectItem>
-                        <SelectItem value="v2">v2</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      CORS Origins (one per line)
-                    </Label>
-                    <Textarea
-                      rows={4}
-                      defaultValue="http://localhost:3000&#10;https://app.example.com"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="enableAPILogs" className="text-sm text-gray-900">
-                      Enable API request logging
-                    </Label>
-                    <Switch id="enableAPILogs" defaultChecked />
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {activeTab === 'notifications' && (
-              <Card className="p-6">
-                <h2 className="text-xl font-semibold text-gray-900 mb-6">Notification Settings</h2>
-                <div className="space-y-6">
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-medium text-gray-900">Email Notifications</h3>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="newUserNotification" className="text-sm text-gray-900">
-                        New user registrations
-                      </Label>
-                      <Switch id="newUserNotification" defaultChecked />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="securityAlerts" className="text-sm text-gray-900">
-                        Security alerts
-                      </Label>
-                      <Switch id="securityAlerts" defaultChecked />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="systemAlerts" className="text-sm text-gray-900">
-                        System alerts
-                      </Label>
-                      <Switch id="systemAlerts" defaultChecked />
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="mb-2 block">
-                      Admin Email Recipients (comma-separated)
-                    </Label>
-                    <Input
-                      type="text"
-                      defaultValue="admin@example.com, security@example.com"
-                    />
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {/* Save Button */}
-            <div className="mt-6">
-              <Button className="flex items-center gap-2">
-                <Save className="h-4 w-4" />
-                Save Settings
+              </div>
+              <Button variant="outline" size="sm">
+                Configure
               </Button>
             </div>
-          </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">OAuth2 Providers</div>
+                <div className="text-sm text-muted-foreground">
+                  Manage external authentication providers
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Manage
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>API Settings</CardTitle>
+            <CardDescription>Configure API rate limits and access</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="rate-limit">Rate Limit (requests/minute)</Label>
+                <Input
+                  id="rate-limit"
+                  type="number"
+                  defaultValue="100"
+                  placeholder="100"
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="api-timeout">API Timeout (seconds)</Label>
+                <Input
+                  id="api-timeout"
+                  type="number"
+                  defaultValue="30"
+                  placeholder="30"
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">API Key Management</div>
+                <div className="text-sm text-muted-foreground">
+                  View and manage API keys
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Manage Keys
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Webhook Settings</div>
+                <div className="text-sm text-muted-foreground">
+                  Configure webhook endpoints
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Configure
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Notification Settings</CardTitle>
+            <CardDescription>Configure system notifications</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Email Notifications</div>
+                <div className="text-sm text-muted-foreground">
+                  Send email alerts for critical events
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Configure
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Slack Integration</div>
+                <div className="text-sm text-muted-foreground">
+                  Send alerts to Slack channels
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Connect
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Alert Thresholds</div>
+                <div className="text-sm text-muted-foreground">
+                  Configure alert triggers and thresholds
+                </div>
+              </div>
+              <Button variant="outline" size="sm">
+                Configure
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="flex justify-end gap-4">
+          <Button variant="outline">Reset to Defaults</Button>
+          <Button onClick={handleSave} disabled={isSaving}>
+            <Save className="mr-2 h-4 w-4" />
+            {isSaving ? 'Saving...' : 'Save Changes'}
+          </Button>
         </div>
       </div>
     </SuperAdminLayout>

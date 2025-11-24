@@ -10,7 +10,6 @@ export * from './label'
 export * from './select'
 export * from './spinner'
 export * from './switch'
-export * from './toast'
 
 // Export shadcn pagination components with specific names
 export {
