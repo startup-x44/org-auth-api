@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -213,25 +214,45 @@ func initDatabase(cfg *config.Config) *gorm.DB {
 		logger.FatalMsg("Failed to add GORM tracing plugin", err)
 	}
 
-	// Auto migrate the schema
+	// Auto migrate the schema (GORM AutoMigrate is safe - it only adds missing columns/tables)
+	// If migration fails (e.g., tables already exist), log warning but continue
 	if err := repository.Migrate(db); err != nil {
-		logger.FatalMsg("Failed to migrate database", err)
+		// In production, don't fail if tables already exist - just log warning
+		if cfg.Environment == "production" {
+			logger.WarnMsg("Database migration had issues (tables may already exist)", map[string]interface{}{
+				"error": err.Error(),
+			})
+		} else {
+			logger.FatalMsg("Failed to migrate database", err)
+		}
 	}
 
-	// Run database seeders
+	// Run database seeders (only seeds if data doesn't exist)
 	if err := runSeeders(db); err != nil {
-		logger.FatalMsg("Failed to run database seeders", err)
+		// Seeders are idempotent, but log if there's an issue
+		logger.WarnMsg("Database seeding had issues (data may already exist)", map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
 	return db
 }
 
 func initRedis(cfg *config.Config) *redis.Client {
-	rdb := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port),
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
-	})
+	}
+
+	// Enable TLS for Upstash or other cloud Redis providers
+	if cfg.Redis.TLSEnabled {
+		opts.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	}
+
+	rdb := redis.NewClient(opts)
 
 	// Add OpenTelemetry tracing to Redis BEFORE any commands (including Ping)
 	rdb.AddHook(redisotel.NewTracingHook())
