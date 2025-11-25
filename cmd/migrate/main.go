@@ -18,8 +18,10 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 
-	// Build database connection string
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+	// Build database connection string with pooler support
+	// IMPORTANT: prefer_simple_protocol=true is required for Supabase pooler (pgBouncer)
+	// to avoid SASL authentication errors
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s prefer_simple_protocol=true",
 		cfg.Database.Host,
 		cfg.Database.Port,
 		cfg.Database.User,
