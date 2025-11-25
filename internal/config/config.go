@@ -89,14 +89,15 @@ type RateLimitConfig struct {
 }
 
 type EmailConfig struct {
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	FromEmail   string
-	FromName    string
-	Enabled     bool
-	FrontendURL string
+	Host         string
+	Port         int
+	Username     string
+	Password     string
+	FromEmail    string
+	FromName     string
+	Enabled      bool
+	FrontendURL  string
+	ResendAPIKey string // Resend API key (if using Resend instead of SMTP)
 }
 
 func Load() *Config {
@@ -152,14 +153,15 @@ func Load() *Config {
 			MaxSessions:         getEnvAsInt("MAX_CONCURRENT_SESSIONS", 5),
 		},
 		Email: EmailConfig{
-			Host:        getEnv("SMTP_HOST", "sandbox.smtp.mailtrap.io"),
-			Port:        getEnvAsInt("SMTP_PORT", 587),
-			Username:    getEnv("SMTP_USERNAME", ""),
-			Password:    getEnv("SMTP_PASSWORD", ""),
-			FromEmail:   getEnv("SMTP_FROM_EMAIL", "noreply@example.com"),
-			FromName:    getEnv("SMTP_FROM_NAME", "Auth Service"),
-			Enabled:     getEnv("EMAIL_ENABLED", "true") == "true",
-			FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+			Host:         getEnv("SMTP_HOST", "sandbox.smtp.mailtrap.io"),
+			Port:         getEnvAsInt("SMTP_PORT", 587),
+			Username:     getEnv("SMTP_USERNAME", ""),
+			Password:     getEnv("SMTP_PASSWORD", ""),
+			FromEmail:    getEnv("SMTP_FROM_EMAIL", "noreply@example.com"),
+			FromName:     getEnv("SMTP_FROM_NAME", "Auth Service"),
+			Enabled:      getEnv("EMAIL_ENABLED", "true") == "true",
+			FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:3000"),
+			ResendAPIKey: getEnv("RESEND_API_KEY", ""), // Resend API key (optional)
 		},
 		Logging: LoggingConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),

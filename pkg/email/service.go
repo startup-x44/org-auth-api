@@ -8,6 +8,8 @@ import (
 	"net/url"
 
 	"auth-service/internal/config"
+
+	"github.com/resend/resend-go/v2"
 )
 
 // Service defines the interface for email operations
@@ -82,8 +84,14 @@ func (s *service) SendVerificationEmail(toEmail, verificationCode string) error 
 	return s.sendEmail(toEmail, subject, htmlContent)
 }
 
-// sendEmail sends an email via SMTP
+// sendEmail sends an email via SMTP or Resend API
 func (s *service) sendEmail(to, subject, htmlBody string) error {
+	// Check if using Resend API (RESEND_API_KEY is set)
+	if s.config.ResendAPIKey != "" {
+		return s.sendViaResend(to, subject, htmlBody)
+	}
+
+	// Fallback to SMTP
 	auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
 
 	// Build email message
@@ -101,6 +109,26 @@ func (s *service) sendEmail(to, subject, htmlBody string) error {
 		return fmt.Errorf("failed to send email: %w", err)
 	}
 
+	return nil
+}
+
+// sendViaResend sends email using Resend SDK
+func (s *service) sendViaResend(to, subject, htmlBody string) error {
+	client := resend.NewClient(s.config.ResendAPIKey)
+
+	params := &resend.SendEmailRequest{
+		From:    fmt.Sprintf("%s <%s>", s.config.FromName, s.config.FromEmail),
+		To:      []string{to},
+		Subject: subject,
+		Html:    htmlBody,
+	}
+
+	sent, err := client.Emails.Send(params)
+	if err != nil {
+		return fmt.Errorf("failed to send email via Resend: %w", err)
+	}
+
+	fmt.Printf("✅ Email sent via Resend to %s (ID: %s)\n", to, sent.Id)
 	return nil
 }
 
@@ -218,7 +246,7 @@ func (s *service) generateInvitationEmailHTML(inviterName, organizationName, inv
 
 // generateVerificationEmailHTML generates HTML content for email verification with 6-digit code
 func (s *service) generateVerificationEmailHTML(toEmail, verificationCode string) (string, error) {
-	verifyURL := fmt.Sprintf("http://localhost:3000/auth/verify-email?email=%s", toEmail)
+	verifyURL := fmt.Sprintf("%s/auth/verify-email?email=%s", s.config.FrontendURL, toEmail)
 
 	tmpl := `
 <!DOCTYPE html>
