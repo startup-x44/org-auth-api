@@ -1,5 +1,7 @@
-package migrations
-package migrations
+//go:build ignore
+
+package main
+
 
 import (
 	"database/sql"

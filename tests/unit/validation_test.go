@@ -240,7 +240,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing uppercase
 		{
 			name:     "No uppercase",
-			password: "Admin123!!",
+			password: "admin123!!",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoUpper,
 		},
@@ -248,7 +248,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing lowercase
 		{
 			name:     "No lowercase",
-			password: "Admin123!!",
+			password: "ADMIN123!!",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoLower,
 		},
@@ -264,7 +264,7 @@ func TestValidatePassword(t *testing.T) {
 		// Invalid passwords - Missing special character
 		{
 			name:     "No special character",
-			password: "Admin123!",
+			password: "Admin12345",
 			wantErr:  true,
 			errType:  validation.ErrPasswordNoSpecial,
 		},

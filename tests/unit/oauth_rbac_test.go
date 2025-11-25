@@ -71,7 +71,7 @@ func TestOAuthRBACIntegration_SuperadminPermissions(t *testing.T) {
 
 	// Create client app
 	clientAppSvc := service.NewClientAppService(repo)
-	clientAppResp, clientSecret, err := clientAppSvc.CreateClientApp(ctx, &service.CreateClientAppRequest{
+	clientAppResp, clientSecret, err := clientAppSvc.CreateClientApp(ctx, org.ID, &service.CreateClientAppRequest{
 		Name:          "Test Client",
 		RedirectURIs:  []string{"http://localhost:3000/callback"},
 		AllowedScopes: []string{"system:admin", "system:user", "system:audit"},

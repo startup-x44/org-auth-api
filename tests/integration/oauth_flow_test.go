@@ -45,7 +45,7 @@ func TestOAuthFlow_Integration(t *testing.T) {
 
 	t.Run("Complete OAuth2.1 Authorization Code + PKCE Flow", func(t *testing.T) {
 		// Step 1: Create a test client application
-		clientApp, clientSecret, err := clientAppSvc.CreateClientApp(ctx, &service.CreateClientAppRequest{
+		clientApp, clientSecret, err := clientAppSvc.CreateClientApp(ctx, testOrg.ID, &service.CreateClientAppRequest{
 			Name:           "Test OAuth Client",
 			RedirectURIs:   []string{"http://localhost:3000/callback"},
 			AllowedScopes:  []string{"profile", "email"},

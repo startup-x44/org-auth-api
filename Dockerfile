@@ -25,16 +25,25 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/server
 # Final stage
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates and create non-root user
+RUN apk --no-cache add ca-certificates && \
+    adduser -D -g '' appuser
 
 WORKDIR /root/
+# Change to /app for non-root user
+WORKDIR /app
 
 # Copy the binary from builder stage
 COPY --from=builder /app/main .
 
+# Set ownership
+RUN chown appuser:appuser /app/main
+
 # Expose port
 EXPOSE 8080
+
+# Switch to non-root user
+USER appuser
 
 # Command to run
 CMD ["./main"]
