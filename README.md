@@ -554,7 +554,7 @@ SERVER_PORT=8081 go run ./cmd/server
 
 ## License
 
-Proprietary - BlockSure Auth Service
+Proprietary - NiloAuth Auth Service
 
 ## Support
 

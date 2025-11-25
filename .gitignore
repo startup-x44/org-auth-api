@@ -46,3 +46,6 @@ Thumbs.db
 # postgres_data/
 # redis_data/
 docs/propmts
+frontend/
+frontend/*
+frontend/.gitignore

@@ -614,7 +614,7 @@ GET    /api/v1/oauth/audit/tokens (admin)
   "data": {
     "user": {
       "id": "admin-uuid",
-      "email": "admin@blocksure.io",
+      "email": "admin@NiloAuth.io",
       "is_admin": true
     },
     "token": {
@@ -1050,8 +1050,8 @@ GET    /api/v1/oauth/audit/tokens (admin)
   "permissions": ["*"],
   "iat": 1700000000,
   "exp": 1700000900,
-  "iss": "blocksure-auth",
-  "aud": "blocksure-api"
+  "iss": "NiloAuth-auth",
+  "aud": "NiloAuth-api"
 }
 ```
 
@@ -1063,7 +1063,7 @@ GET    /api/v1/oauth/audit/tokens (admin)
   "token_id": "rt_abc123def456",
   "iat": 1700000000,
   "exp": 1702592000,
-  "iss": "blocksure-auth"
+  "iss": "NiloAuth-auth"
 }
 ```
 

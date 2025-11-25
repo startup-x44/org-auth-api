@@ -87,7 +87,7 @@ func Initialize(cfg *Config) (*TracerProvider, error) {
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion(getServiceVersion()),
 			semconv.DeploymentEnvironment(cfg.Environment),
-			attribute.String("service.namespace", "blocksure"),
+			attribute.String("service.namespace", "NiloAuth"),
 		),
 	)
 	if err != nil {
